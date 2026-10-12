@@ -1,0 +1,10 @@
+# Compiled binaries
+/ghostpress
+/vulndb-gen
+/fingerprint-gen
+*.exe
+/dist/
+
+
+# Orphaned raw DB snapshot (the embedded copy is vulndb.json.gz)
+/data/vulndb.json

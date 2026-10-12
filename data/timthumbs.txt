@@ -1,0 +1,8 @@
+wp-content/themes/starter/timthumb.php
+wp-content/themes starter/thumb.php
+wp-content/themes/starter/lib/timthumb.php
+wp-content/plugins/flavor/timthumb.php
+wp-content/plugins/flavor/thumb.php
+wp-includes/js/timthumb.php
+timthumb.php
+thumb.php

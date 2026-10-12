@@ -1,0 +1,63 @@
+name: Update vulnerability database
+
+# Builds the vulnerability database daily from the Wordfence Intelligence v3
+# feed and publishes it as the rolling "vulndb-latest" release asset, which
+# `ghostpress update` pulls. The Wordfence key is a repository secret and is
+# only ever injected as an environment variable at run time.
+#
+# Required repo secret: WORDFENCE_API_KEY (Settings → Secrets and variables → Actions).
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # daily 06:00 UTC
+  workflow_dispatch: {} # manual "Run workflow" button
+
+concurrency:
+  group: update-vulndb
+  cancel-in-progress: false
+
+permissions:
+  contents: write # create/update releases
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Generate database
+        working-directory: tools
+        env:
+          WORDFENCE_API_KEY: ${{ secrets.WORDFENCE_API_KEY }}
+        run: |
+          go run ./vulndb-gen -o "$RUNNER_TEMP/vulndb.json.gz"
+
+      - name: Checksum and sanity check
+        run: |
+          cd "$RUNNER_TEMP"
+          # Fail the run (and skip publishing) if the output is implausibly small.
+          test "$(stat -c%s vulndb.json.gz)" -gt 500000
+          gzip -t vulndb.json.gz
+          sha256sum vulndb.json.gz > vulndb.json.gz.sha256
+          cat vulndb.json.gz.sha256
+
+      - name: Publish rolling release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Create the rolling release once; thereafter just replace its assets.
+          # --latest=false so this data release never shadows versioned binary
+          # releases as GitHub's "latest".
+          gh release create vulndb-latest \
+            --title "Vulnerability database (latest)" \
+            --notes "Auto-generated daily. Vulnerability data © Defiant Inc. (Wordfence Intelligence); see data/ATTRIBUTION.md." \
+            --latest=false \
+            2>/dev/null || true
+          gh release upload vulndb-latest \
+            "$RUNNER_TEMP/vulndb.json.gz" \
+            "$RUNNER_TEMP/vulndb.json.gz.sha256" \
+            --clobber

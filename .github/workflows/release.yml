@@ -1,0 +1,89 @@
+name: Release binaries
+
+# Builds cross-platform ghostpress binaries on a version tag (vX.Y.Z) and
+# publishes them as a GitHub release. The embedded vulnerability database is
+# refreshed from Wordfence at build time when WORDFENCE_API_KEY is available,
+# otherwise the committed data/vulndb.json.gz is embedded.
+#
+# The binaries are built with main.vulnDBURL pointing at the rolling
+# "vulndb-latest" data release, so `ghostpress update` always fetches the
+# daily-refreshed database regardless of binary version.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build (e.g. v0.2.0)"
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Refresh embedded database (if key available)
+        env:
+          WORDFENCE_API_KEY: ${{ secrets.WORDFENCE_API_KEY }}
+        run: |
+          if [ -n "$WORDFENCE_API_KEY" ]; then
+            echo "Regenerating data/vulndb.json.gz from Wordfence feed"
+            (cd tools && go run ./vulndb-gen -o ../data/vulndb.json.gz)
+          else
+            echo "No WORDFENCE_API_KEY secret; embedding committed data/vulndb.json.gz"
+          fi
+          gzip -t data/vulndb.json.gz
+
+      - name: Build binaries
+        env:
+          VULNDB_URL: https://github.com/${{ github.repository }}/releases/download/vulndb-latest/vulndb.json.gz
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          targets="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64"
+          for t in $targets; do
+            GOOS="${t%/*}"; GOARCH="${t#*/}"
+            name="ghostpress-${VERSION}-${GOOS}-${GOARCH}"
+            bin="ghostpress"; [ "$GOOS" = "windows" ] && bin="ghostpress.exe"
+            echo "building $name"
+            mkdir -p "dist/$name"
+            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build -trimpath \
+              -ldflags "-s -w -X main.version=${VERSION} -X main.vulnDBURL=${VULNDB_URL}" \
+              -o "dist/$name/$bin" .
+            cp data/ATTRIBUTION.md "dist/$name/" 2>/dev/null || true
+            cp README* LICENSE* "dist/$name/" 2>/dev/null || true
+            if [ "$GOOS" = "windows" ]; then
+              (cd dist && zip -qr "${name}.zip" "$name")
+            else
+              (cd dist && tar czf "${name}.tar.gz" "$name")
+            fi
+          done
+          cp data/vulndb.json.gz "dist/vulndb-${VERSION}.json.gz"
+          (cd dist && sha256sum *.tar.gz *.zip *.json.gz > sha256sums.txt)
+          ls -la dist
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$VERSION" \
+            dist/*.tar.gz dist/*.zip dist/vulndb-*.json.gz dist/sha256sums.txt \
+            --title "$VERSION" \
+            --generate-notes \
+            --notes "Binaries embed a snapshot of the vulnerability database; \`ghostpress update\` pulls the daily-refreshed copy. Vulnerability data © Defiant Inc. (Wordfence Intelligence); see data/ATTRIBUTION.md."
