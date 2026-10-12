@@ -157,6 +157,8 @@ type Plugin struct {
 	Outdated           bool            `json:"outdated,omitempty"`
 	DirectoryListing   bool            `json:"directory_listing,omitempty"`
 	ErrorLog           bool            `json:"error_log,omitempty"`
+	VersionBlocked     bool            `json:"version_blocked,omitempty"`
+	KnownVulnCount     int             `json:"known_vuln_count,omitempty"`
 }
 
 type Theme struct {
@@ -174,6 +176,8 @@ type Theme struct {
 	StyleURI           string          `json:"style_uri,omitempty"`
 	Author             string          `json:"author,omitempty"`
 	AuthorURI          string          `json:"author_uri,omitempty"`
+	VersionBlocked     bool            `json:"version_blocked,omitempty"`
+	KnownVulnCount     int             `json:"known_vuln_count,omitempty"`
 }
 
 type User struct {
@@ -223,6 +227,8 @@ type ScanResult struct {
 	RequestsDone        int                  `json:"requests_done"`
 	DataSent            int64                `json:"data_sent"`
 	DataReceived        int64                `json:"data_received"`
+	RateLimited         int                  `json:"rate_limited,omitempty"`
+	Forbidden           int                  `json:"forbidden,omitempty"`
 	Error               string               `json:"error,omitempty"`
 }
 
@@ -264,6 +270,7 @@ type ScanOptions struct {
 	OutputFormat     string
 	OutputFile       string
 	DisableTLSChecks bool
+	Debug            bool
 
 	Passwords      string
 	Usernames      []string

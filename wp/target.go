@@ -13,6 +13,12 @@ import (
 	"ghostpress/httpclient"
 )
 
+// slugCharClass matches a valid WordPress plugin/theme directory slug: it must
+// start alphanumeric and contain only slug-safe characters. Using this instead
+// of a loose [^/]+ prevents JSON/JS fragments on a page (or a Cloudflare
+// challenge page) from being captured as bogus slugs like `*","`.
+const slugCharClass = `[a-zA-Z0-9][a-zA-Z0-9._-]*`
+
 type Target struct {
 	URL             string
 	EffectiveURL    string
@@ -25,6 +31,7 @@ type Target struct {
 	PluginsDir      string
 	SubDir          string
 	IsWordPress     bool
+	WPVersion       string // detected core version, used to discard default ?ver= values
 }
 
 func NewTarget(ctx context.Context, client *httpclient.Client, rawURL string, force bool) (*Target, error) {

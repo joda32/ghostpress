@@ -11,9 +11,9 @@ import (
 )
 
 type palette struct {
-	reset, bold, dim      string
+	reset, bold, dim       string
 	critical, high, medium string
-	info, name, method    string
+	info, name, method     string
 }
 
 func newPalette(colour bool) palette {
@@ -24,12 +24,12 @@ func newPalette(colour bool) palette {
 		reset:    "\x1b[0m",
 		bold:     "\x1b[1m",
 		dim:      "\x1b[2m",
-		critical: "\x1b[31m",    // red
-		high:     "\x1b[33m",    // amber
-		medium:   "\x1b[32m",    // green
-		info:     "\x1b[90m",    // grey
-		name:     "\x1b[1;36m",  // bold cyan
-		method:   "\x1b[35m",    // magenta
+		critical: "\x1b[31m",   // red
+		high:     "\x1b[33m",   // amber
+		medium:   "\x1b[32m",   // green
+		info:     "\x1b[90m",   // grey
+		name:     "\x1b[1;36m", // bold cyan
+		method:   "\x1b[35m",   // magenta
 	}
 }
 
@@ -182,7 +182,12 @@ func (f *CLIFormatter) MainTheme(theme *model.Theme) {
 		f.pr("      %s%-7s%s %s\n", f.p.method, "Author", f.p.reset, theme.Author)
 	}
 	f.pr("      %s%-7s%s %s\n", f.p.method, "Found", f.p.reset, theme.FoundBy)
-	f.printVulns(theme.Vulnerabilities)
+	if theme.VersionBlocked {
+		f.pr("      %s%-7s%s %s%d known vulnerabilities could not be confirmed (version blocked by WAF)%s\n",
+			f.p.method, "Note", f.p.reset, f.p.high, theme.KnownVulnCount, f.p.reset)
+	} else {
+		f.printVulns(theme.Vulnerabilities)
+	}
 }
 
 func (f *CLIFormatter) Plugins(plugins []model.Plugin) {
@@ -207,6 +212,9 @@ func (f *CLIFormatter) Plugins(plugins []model.Plugin) {
 		ver := p.Version
 		if ver == "" {
 			ver = "unknown"
+			if p.VersionBlocked {
+				ver = "unknown (WAF blocked)"
+			}
 		}
 		f.pr("  %s%s%s  %s%s%s\n", f.p.name, p.Slug, f.p.reset, f.p.dim, ver, f.p.reset)
 		f.pr("      %s%-7s%s %s\n", f.p.method, "Found", f.p.reset, p.FoundBy)
@@ -216,7 +224,12 @@ func (f *CLIFormatter) Plugins(plugins []model.Plugin) {
 		for _, entry := range p.InterestingEntries {
 			f.pr("      %s→%s %s\n", f.p.dim, f.p.reset, entry)
 		}
-		f.printVulns(p.Vulnerabilities)
+		if p.VersionBlocked {
+			f.pr("      %s%-7s%s %s%d known vulnerabilities could not be confirmed (version blocked by WAF)%s\n",
+				f.p.method, "Note", f.p.reset, f.p.high, p.KnownVulnCount, f.p.reset)
+		} else {
+			f.printVulns(p.Vulnerabilities)
+		}
 	}
 }
 
@@ -242,10 +255,18 @@ func (f *CLIFormatter) Themes(themes []model.Theme) {
 		ver := t.Version
 		if ver == "" {
 			ver = "unknown"
+			if t.VersionBlocked {
+				ver = "unknown (WAF blocked)"
+			}
 		}
 		f.pr("  %s%s%s  %s%s%s\n", f.p.name, t.Slug, f.p.reset, f.p.dim, ver, f.p.reset)
 		f.pr("      %s%-7s%s %s\n", f.p.method, "Found", f.p.reset, t.FoundBy)
-		f.printVulns(t.Vulnerabilities)
+		if t.VersionBlocked {
+			f.pr("      %s%-7s%s %s%d known vulnerabilities could not be confirmed (version blocked by WAF)%s\n",
+				f.p.method, "Note", f.p.reset, f.p.high, t.KnownVulnCount, f.p.reset)
+		} else {
+			f.printVulns(t.Vulnerabilities)
+		}
 	}
 }
 
@@ -368,6 +389,11 @@ func (f *CLIFormatter) ScanFinished(result *model.ScanResult) {
 		f.pr("%s%s%s%s\n", f.p.bold, f.p.critical, strings.Join(parts, ", "), f.p.reset)
 	} else {
 		f.pr("%sNo vulnerabilities identified.%s\n", f.p.bold, f.p.reset)
+	}
+
+	if result.RateLimited > 0 || result.Forbidden > 0 {
+		f.pr("%s%s⚠ interference detected: %d rate-limited (429/503), %d forbidden (403) — the target is likely behind a WAF; some version detection was blocked and results may be incomplete%s\n",
+			f.p.bold, f.p.high, result.RateLimited, result.Forbidden, f.p.reset)
 	}
 
 	f.pr("%s%d requests, %s received, %s%s\n",

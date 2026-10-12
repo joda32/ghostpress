@@ -14,7 +14,7 @@ import (
 func DetectMainTheme(ctx context.Context, client *httpclient.Client, target *Target, mode model.DetectionMode) *model.Theme {
 	body := string(target.Homepage)
 
-	pattern := fmt.Sprintf(`(?i)/%s/themes/([^/]+)/style\.css`, regexp.QuoteMeta(target.ContentDir))
+	pattern := fmt.Sprintf(`(?i)/%s/themes/(%s)/style\.css`, regexp.QuoteMeta(target.ContentDir), slugCharClass)
 	re := regexp.MustCompile(pattern)
 	if m := re.FindStringSubmatch(body); len(m) > 1 {
 		theme := &model.Theme{
@@ -24,11 +24,18 @@ func DetectMainTheme(ctx context.Context, client *httpclient.Client, target *Tar
 			Confidence: 80,
 		}
 		detectThemeVersion(ctx, client, target, theme)
-		theme.Vulnerabilities = lookupThemeVulns(theme.Slug, theme.Version)
+		if theme.Version == "" {
+			if v := versionFromHomepageAssets(target, "themes", theme.Slug); v != "" {
+				theme.Version = v
+				theme.VersionBlocked = false
+				debugf("theme %s: version %s from homepage ?ver= asset (fallback)", theme.Slug, v)
+			}
+		}
+		assignThemeVulns(theme)
 		return theme
 	}
 
-	pattern = fmt.Sprintf(`(?i)/%s/themes/([^/"']+)/`, regexp.QuoteMeta(target.ContentDir))
+	pattern = fmt.Sprintf(`(?i)/%s/themes/(%s)/`, regexp.QuoteMeta(target.ContentDir), slugCharClass)
 	re = regexp.MustCompile(pattern)
 	if m := re.FindStringSubmatch(body); len(m) > 1 {
 		theme := &model.Theme{
@@ -38,7 +45,14 @@ func DetectMainTheme(ctx context.Context, client *httpclient.Client, target *Tar
 			Confidence: 70,
 		}
 		detectThemeVersion(ctx, client, target, theme)
-		theme.Vulnerabilities = lookupThemeVulns(theme.Slug, theme.Version)
+		if theme.Version == "" {
+			if v := versionFromHomepageAssets(target, "themes", theme.Slug); v != "" {
+				theme.Version = v
+				theme.VersionBlocked = false
+				debugf("theme %s: version %s from homepage ?ver= asset (fallback)", theme.Slug, v)
+			}
+		}
+		assignThemeVulns(theme)
 		return theme
 	}
 
@@ -73,15 +87,33 @@ func EnumerateThemes(ctx context.Context, client *httpclient.Client, target *Tar
 
 	var results []model.Theme
 	for _, t := range found {
-		if t.Version == "" {
+		if t.Version == "" && !t.VersionBlocked {
 			detectThemeVersion(ctx, client, target, t)
 		}
-		if len(t.Vulnerabilities) == 0 {
-			t.Vulnerabilities = lookupThemeVulns(t.Slug, t.Version)
+		if t.Version == "" {
+			if v := versionFromHomepageAssets(target, "themes", t.Slug); v != "" {
+				t.Version = v
+				t.VersionBlocked = false
+				debugf("theme %s: version %s from homepage ?ver= asset (fallback)", t.Slug, v)
+			}
+		}
+		if len(t.Vulnerabilities) == 0 && t.KnownVulnCount == 0 {
+			assignThemeVulns(t)
 		}
 		results = append(results, *t)
 	}
 	return results
+}
+
+// assignThemeVulns attaches vulnerabilities for a theme, except when version
+// detection was blocked by a WAF — then it records the count of known vulns
+// instead of presenting them as confirmed findings.
+func assignThemeVulns(t *model.Theme) {
+	if t.VersionBlocked {
+		t.KnownVulnCount = len(lookupThemeVulns(t.Slug, ""))
+		return
+	}
+	t.Vulnerabilities = lookupThemeVulns(t.Slug, t.Version)
 }
 
 func themeSlugsToCheck(customFile string) []string {
@@ -97,7 +129,7 @@ func passiveThemeFinders(target *Target) []model.Theme {
 	var themes []model.Theme
 	body := string(target.Homepage)
 
-	pattern := fmt.Sprintf(`(?i)/%s/themes/([^/"']+)/`, regexp.QuoteMeta(target.ContentDir))
+	pattern := fmt.Sprintf(`(?i)/%s/themes/(%s)/`, regexp.QuoteMeta(target.ContentDir), slugCharClass)
 	re := regexp.MustCompile(pattern)
 	seen := make(map[string]bool)
 
@@ -164,12 +196,22 @@ func aggressiveThemeFinders(ctx context.Context, client *httpclient.Client, targ
 func detectThemeVersion(ctx context.Context, client *httpclient.Client, target *Target, theme *model.Theme) {
 	styleURL := target.ThemeURL(theme.Slug) + "style.css"
 	resp, err := client.Get(ctx, styleURL)
-	if err != nil || resp.StatusCode != 200 {
+	if err != nil {
+		return
+	}
+	if resp.StatusCode != 200 {
+		if isBlockedStatus(resp.StatusCode) {
+			theme.VersionBlocked = true
+			debugf("theme %s: style.css HTTP %d — version detection blocked", theme.Slug, resp.StatusCode)
+		}
 		return
 	}
 
-	body := string(resp.Body)
-	parseStyleCSS(body, theme)
+	parseStyleCSS(string(resp.Body), theme)
+	if theme.Version == "" && notRealFile(resp, target) {
+		theme.VersionBlocked = true
+		debugf("theme %s: style.css 200 but HTML/soft-404 — version not accessible", theme.Slug)
+	}
 }
 
 func parseStyleCSS(body string, theme *model.Theme) {

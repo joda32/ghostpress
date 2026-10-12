@@ -35,6 +35,7 @@ func DetectVersion(ctx context.Context, client *httpclient.Client, target *Targe
 	}
 
 	if best.Confidence < 40 {
+		debugf("version: best candidate %q conf %d below threshold 40 — not reported", best.Number, best.Confidence)
 		return nil
 	}
 
@@ -43,6 +44,7 @@ func DetectVersion(ctx context.Context, client *httpclient.Client, target *Targe
 		best.Status = "insecure"
 	}
 
+	debugf("version: %s (%s, conf %d, %d vulns)", best.Number, best.FoundBy, best.Confidence, len(best.Vulnerabilities))
 	return &best
 }
 
@@ -53,9 +55,9 @@ func passiveVersionFinders(target *Target) []model.WPVersion {
 	metaRe := regexp.MustCompile(`<meta\s+name=["']generator["']\s+content=["']WordPress\s+([\d.]+)["']`)
 	if m := metaRe.FindStringSubmatch(body); len(m) > 1 {
 		results = append(results, model.WPVersion{
-			Number:     m[1],
-			FoundBy:    "Meta Generator (Passive)",
-			Confidence: 80,
+			Number:             m[1],
+			FoundBy:            "Meta Generator (Passive)",
+			Confidence:         80,
 			InterestingEntries: []string{m[0]},
 		})
 	}
@@ -71,9 +73,9 @@ func passiveVersionFinders(target *Target) []model.WPVersion {
 		re := regexp.MustCompile(fp.pattern)
 		if m := re.FindStringSubmatch(body); len(m) > 1 {
 			results = append(results, model.WPVersion{
-				Number:     m[1],
-				FoundBy:    fp.name + " (Passive)",
-				Confidence: 80,
+				Number:             m[1],
+				FoundBy:            fp.name + " (Passive)",
+				Confidence:         80,
 				InterestingEntries: []string{m[0]},
 			})
 		}
@@ -113,9 +115,9 @@ func aggressiveVersionFinders(ctx context.Context, client *httpclient.Client, ta
 		re := regexp.MustCompile(fp.pattern)
 		if m := re.FindStringSubmatch(string(resp.Body)); len(m) > 1 {
 			results = append(results, model.WPVersion{
-				Number:     m[1],
-				FoundBy:    fp.name + " (Aggressive)",
-				Confidence: 90,
+				Number:             m[1],
+				FoundBy:            fp.name + " (Aggressive)",
+				Confidence:         90,
 				InterestingEntries: []string{target.EffectiveURL + fp.path},
 			})
 			break
@@ -127,9 +129,9 @@ func aggressiveVersionFinders(ctx context.Context, client *httpclient.Client, ta
 		re := regexp.MustCompile(`(?i)<br\s*/?\s*>\s*version\s+([\d.]+)`)
 		if m := re.FindStringSubmatch(string(resp.Body)); len(m) > 1 {
 			results = append(results, model.WPVersion{
-				Number:     m[1],
-				FoundBy:    "Readme (Aggressive)",
-				Confidence: 90,
+				Number:             m[1],
+				FoundBy:            "Readme (Aggressive)",
+				Confidence:         90,
 				InterestingEntries: []string{target.EffectiveURL + "readme.html"},
 			})
 		}
@@ -202,9 +204,9 @@ func fingerprintVersion(ctx context.Context, client *httpclient.Client, target *
 	}
 
 	return &model.WPVersion{
-		Number:     bestVersion,
-		FoundBy:    "Fingerprinting (Aggressive)",
-		Confidence: confidence,
+		Number:             bestVersion,
+		FoundBy:            "Fingerprinting (Aggressive)",
+		Confidence:         confidence,
 		InterestingEntries: []string{fmt.Sprintf("matched %d of %d fingerprint file(s)", bestCount, checked)},
 	}
 }

@@ -67,6 +67,7 @@ func main() {
 	flags.IntVar(&opts.RequestTimeout, "request-timeout", 30, "Request timeout in seconds")
 	flags.IntVar(&opts.MaxRedirects, "max-redirects", 10, "Maximum number of redirects")
 	flags.BoolVar(&opts.DisableTLSChecks, "disable-tls-checks", false, "Disable TLS certificate verification")
+	flags.BoolVarP(&opts.Debug, "debug", "v", false, "Verbose debug logging to stderr (per-request status + detection reasoning)")
 
 	flags.StringVarP(&enumerate, "enumerate", "e", "", "Enumeration options (p,vp,ap,t,vt,at,u,cb,dbe,tt,m)")
 	flags.StringVar(&opts.UsersRange, "users-range", "10", "User ID range for brute forcing (default: 10)")

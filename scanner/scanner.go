@@ -34,7 +34,10 @@ func New(opts model.ScanOptions, out output.Formatter) (*Scanner, error) {
 		RequestTimeout:   opts.RequestTimeout,
 		MaxRedirects:     opts.MaxRedirects,
 		DisableTLSChecks: opts.DisableTLSChecks,
+		Debug:            opts.Debug,
 	}
+
+	wp.SetDebug(opts.Debug)
 
 	client, err := httpclient.New(clientOpts)
 	if err != nil {
@@ -81,6 +84,8 @@ func (s *Scanner) Run(ctx context.Context) *model.ScanResult {
 		stats := s.client.GetStats()
 		result.RequestsDone = int(stats.RequestsDone)
 		result.DataReceived = stats.DataReceived
+		rl, fb := s.client.Interference()
+		result.RateLimited, result.Forbidden = int(rl), int(fb)
 		s.out.ScanFinished(result)
 		return result
 	}
@@ -96,6 +101,9 @@ func (s *Scanner) Run(ctx context.Context) *model.ScanResult {
 
 	version := wp.DetectVersion(ctx, s.client, target, mode)
 	result.Version = version
+	if version != nil {
+		target.WPVersion = version.Number
+	}
 	s.out.Version(version)
 
 	mainTheme := wp.DetectMainTheme(ctx, s.client, target, mode)
@@ -117,6 +125,8 @@ func (s *Scanner) Run(ctx context.Context) *model.ScanResult {
 	result.RequestsDone = int(stats.RequestsDone)
 	result.DataSent = stats.DataSent
 	result.DataReceived = stats.DataReceived
+	rl, fb := s.client.Interference()
+	result.RateLimited, result.Forbidden = int(rl), int(fb)
 
 	s.out.ScanFinished(result)
 	return result
