@@ -159,6 +159,11 @@ type Plugin struct {
 	ErrorLog           bool            `json:"error_log,omitempty"`
 	VersionBlocked     bool            `json:"version_blocked,omitempty"`
 	KnownVulnCount     int             `json:"known_vuln_count,omitempty"`
+	// UnconfirmedVulns holds every vulnerability known for this slug across all
+	// versions, populated only when the version could not be determined. They are
+	// NOT confirmed to apply to the installed version and are excluded from the
+	// confirmed-vuln totals; shown in the CLI only under --show-unconfirmed.
+	UnconfirmedVulns []Vulnerability `json:"unconfirmed_vulns,omitempty"`
 }
 
 type Theme struct {
@@ -178,6 +183,8 @@ type Theme struct {
 	AuthorURI          string          `json:"author_uri,omitempty"`
 	VersionBlocked     bool            `json:"version_blocked,omitempty"`
 	KnownVulnCount     int             `json:"known_vuln_count,omitempty"`
+	// UnconfirmedVulns: see Plugin.UnconfirmedVulns.
+	UnconfirmedVulns []Vulnerability `json:"unconfirmed_vulns,omitempty"`
 }
 
 type User struct {
@@ -271,6 +278,7 @@ type ScanOptions struct {
 	OutputFile       string
 	DisableTLSChecks bool
 	Debug            bool
+	ShowUnconfirmed  bool
 
 	Passwords      string
 	Usernames      []string

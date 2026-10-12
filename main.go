@@ -68,6 +68,7 @@ func main() {
 	flags.IntVar(&opts.MaxRedirects, "max-redirects", 10, "Maximum number of redirects")
 	flags.BoolVar(&opts.DisableTLSChecks, "disable-tls-checks", false, "Disable TLS certificate verification")
 	flags.BoolVarP(&opts.Debug, "debug", "v", false, "Verbose debug logging to stderr (per-request status + detection reasoning)")
+	flags.BoolVar(&opts.ShowUnconfirmed, "show-unconfirmed", false, "List vulnerabilities for components whose version could not be detected (shown with a warning; may not apply to the installed version)")
 
 	flags.StringVarP(&enumerate, "enumerate", "e", "", "Enumeration options (p,vp,ap,t,vt,at,u,cb,dbe,tt,m)")
 	flags.StringVar(&opts.UsersRange, "users-range", "10", "User ID range for brute forcing (default: 10)")
@@ -140,7 +141,7 @@ func runScan(opts model.ScanOptions, enumerate string) error {
 		formatter = output.NewJSON(outFile)
 	default:
 		noColor := outFile != nil
-		formatter = output.NewCLI(noColor, outFile)
+		formatter = output.NewCLI(noColor, outFile, opts.ShowUnconfirmed)
 	}
 
 	s, err := scanner.New(opts, formatter)

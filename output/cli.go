@@ -47,11 +47,12 @@ func (p palette) forSeverity(cvss float64, hasExploit bool) string {
 }
 
 type CLIFormatter struct {
-	w io.Writer
-	p palette
+	w               io.Writer
+	p               palette
+	showUnconfirmed bool
 }
 
-func NewCLI(noColor bool, output *os.File) *CLIFormatter {
+func NewCLI(noColor bool, output *os.File, showUnconfirmed bool) *CLIFormatter {
 	w := io.Writer(os.Stdout)
 	if output != nil {
 		w = output
@@ -65,7 +66,7 @@ func NewCLI(noColor bool, output *os.File) *CLIFormatter {
 			colour = info.Mode()&os.ModeCharDevice != 0
 		}
 	}
-	return &CLIFormatter{w: w, p: newPalette(colour)}
+	return &CLIFormatter{w: w, p: newPalette(colour), showUnconfirmed: showUnconfirmed}
 }
 
 func (f *CLIFormatter) pr(format string, args ...any) {
@@ -183,11 +184,30 @@ func (f *CLIFormatter) MainTheme(theme *model.Theme) {
 	}
 	f.pr("      %s%-7s%s %s\n", f.p.method, "Found", f.p.reset, theme.FoundBy)
 	if theme.VersionBlocked {
-		f.pr("      %s%-7s%s %s%d known vulnerabilities could not be confirmed (version blocked by WAF)%s\n",
-			f.p.method, "Note", f.p.reset, f.p.high, theme.KnownVulnCount, f.p.reset)
+		f.unconfirmed(theme.KnownVulnCount, theme.UnconfirmedVulns)
 	} else {
 		f.printVulns(theme.Vulnerabilities)
 	}
+}
+
+// unconfirmed renders the note for a component whose version could not be
+// determined. By default it prints only the count of known vulnerabilities;
+// with --show-unconfirmed it prints a warning and lists those vulnerabilities,
+// which are known for the component across all versions and may not apply to the
+// version actually installed.
+func (f *CLIFormatter) unconfirmed(knownCount int, vulns []model.Vulnerability) {
+	if f.showUnconfirmed {
+		f.pr("      %s%-7s%s %s⚠ --show-unconfirmed: version could not be detected — the %d vulnerabilities below are known for this component across ALL versions and may NOT apply to the installed version%s\n",
+			f.p.method, "Note", f.p.reset, f.p.high, knownCount, f.p.reset)
+		f.printVulns(vulns)
+		return
+	}
+	f.pr("      %s%-7s%s %s%d known vulnerabilities not confirmed (version undetermined)%s",
+		f.p.method, "Note", f.p.reset, f.p.high, knownCount, f.p.reset)
+	if knownCount > 0 {
+		f.pr(" %s(re-run with --show-unconfirmed to list them)%s", f.p.dim, f.p.reset)
+	}
+	f.pr("\n")
 }
 
 func (f *CLIFormatter) Plugins(plugins []model.Plugin) {
@@ -213,7 +233,7 @@ func (f *CLIFormatter) Plugins(plugins []model.Plugin) {
 		if ver == "" {
 			ver = "unknown"
 			if p.VersionBlocked {
-				ver = "unknown (WAF blocked)"
+				ver = "unknown (unconfirmed)"
 			}
 		}
 		f.pr("  %s%s%s  %s%s%s\n", f.p.name, p.Slug, f.p.reset, f.p.dim, ver, f.p.reset)
@@ -225,8 +245,7 @@ func (f *CLIFormatter) Plugins(plugins []model.Plugin) {
 			f.pr("      %s→%s %s\n", f.p.dim, f.p.reset, entry)
 		}
 		if p.VersionBlocked {
-			f.pr("      %s%-7s%s %s%d known vulnerabilities could not be confirmed (version blocked by WAF)%s\n",
-				f.p.method, "Note", f.p.reset, f.p.high, p.KnownVulnCount, f.p.reset)
+			f.unconfirmed(p.KnownVulnCount, p.UnconfirmedVulns)
 		} else {
 			f.printVulns(p.Vulnerabilities)
 		}
@@ -256,14 +275,13 @@ func (f *CLIFormatter) Themes(themes []model.Theme) {
 		if ver == "" {
 			ver = "unknown"
 			if t.VersionBlocked {
-				ver = "unknown (WAF blocked)"
+				ver = "unknown (unconfirmed)"
 			}
 		}
 		f.pr("  %s%s%s  %s%s%s\n", f.p.name, t.Slug, f.p.reset, f.p.dim, ver, f.p.reset)
 		f.pr("      %s%-7s%s %s\n", f.p.method, "Found", f.p.reset, t.FoundBy)
 		if t.VersionBlocked {
-			f.pr("      %s%-7s%s %s%d known vulnerabilities could not be confirmed (version blocked by WAF)%s\n",
-				f.p.method, "Note", f.p.reset, f.p.high, t.KnownVulnCount, f.p.reset)
+			f.unconfirmed(t.KnownVulnCount, t.UnconfirmedVulns)
 		} else {
 			f.printVulns(t.Vulnerabilities)
 		}
@@ -394,6 +412,25 @@ func (f *CLIFormatter) ScanFinished(result *model.ScanResult) {
 	if result.RateLimited > 0 || result.Forbidden > 0 {
 		f.pr("%s%s⚠ interference detected: %d rate-limited (429/503), %d forbidden (403) — the target is likely behind a WAF; some version detection was blocked and results may be incomplete%s\n",
 			f.p.bold, f.p.high, result.RateLimited, result.Forbidden, f.p.reset)
+	}
+
+	unconfirmed := 0
+	if result.MainTheme != nil {
+		unconfirmed += result.MainTheme.KnownVulnCount
+	}
+	for _, p := range result.Plugins {
+		unconfirmed += p.KnownVulnCount
+	}
+	for _, t := range result.Themes {
+		unconfirmed += t.KnownVulnCount
+	}
+	if unconfirmed > 0 {
+		hint := ""
+		if !f.showUnconfirmed {
+			hint = " — re-run with --show-unconfirmed to list them"
+		}
+		f.pr("%s%s⚠ %d additional vulnerabilities are known for components whose version could not be confirmed (not counted above)%s%s\n",
+			f.p.bold, f.p.high, unconfirmed, hint, f.p.reset)
 	}
 
 	f.pr("%s%d requests, %s received, %s%s\n",

@@ -105,12 +105,14 @@ func EnumerateThemes(ctx context.Context, client *httpclient.Client, target *Tar
 	return results
 }
 
-// assignThemeVulns attaches vulnerabilities for a theme, except when version
-// detection was blocked by a WAF — then it records the count of known vulns
-// instead of presenting them as confirmed findings.
+// assignThemeVulns attaches vulnerabilities for a theme, except when the version
+// could not be determined — then it stashes the known vulns under
+// UnconfirmedVulns (and records the count) instead of presenting them as
+// confirmed findings.
 func assignThemeVulns(t *model.Theme) {
 	if t.VersionBlocked {
-		t.KnownVulnCount = len(lookupThemeVulns(t.Slug, ""))
+		t.UnconfirmedVulns = lookupThemeVulns(t.Slug, "")
+		t.KnownVulnCount = len(t.UnconfirmedVulns)
 		return
 	}
 	t.Vulnerabilities = lookupThemeVulns(t.Slug, t.Version)
@@ -197,6 +199,8 @@ func detectThemeVersion(ctx context.Context, client *httpclient.Client, target *
 	styleURL := target.ThemeURL(theme.Slug) + "style.css"
 	resp, err := client.Get(ctx, styleURL)
 	if err != nil {
+		theme.VersionBlocked = true
+		debugf("theme %s: style.css request failed (%v) — version could not be confirmed", theme.Slug, err)
 		return
 	}
 	if resp.StatusCode != 200 {

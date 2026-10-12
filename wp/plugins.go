@@ -50,10 +50,12 @@ func EnumeratePlugins(ctx context.Context, client *httpclient.Client, target *Ta
 			}
 		}
 		if p.VersionBlocked {
-			// Version couldn't be determined because the WAF blocked us — do not
-			// present the full historical vuln list as live findings; record how
-			// many exist so the report can flag them as unconfirmed.
-			p.KnownVulnCount = len(lookupPluginVulns(p.Slug, ""))
+			// Version couldn't be determined (WAF block, soft-404, or transport
+			// error) — do not present the full historical vuln list as live
+			// findings. Keep the known list under UnconfirmedVulns so a report (or
+			// --show-unconfirmed) can surface them, flagged as unconfirmed.
+			p.UnconfirmedVulns = lookupPluginVulns(p.Slug, "")
+			p.KnownVulnCount = len(p.UnconfirmedVulns)
 		} else {
 			p.Vulnerabilities = lookupPluginVulns(p.Slug, p.Version)
 		}
@@ -186,7 +188,8 @@ func detectPluginVersion(ctx context.Context, client *httpclient.Client, target 
 
 	readmeURL := target.PluginURL(plugin.Slug) + "readme.txt"
 	if resp, err := client.Get(ctx, readmeURL); err != nil {
-		debugf("plugin %s: readme.txt error: %v", plugin.Slug, err)
+		blocked = true
+		debugf("plugin %s: readme.txt request failed (%v) — treated as unreachable", plugin.Slug, err)
 	} else if v := stableTagVersion(resp); v != "" {
 		plugin.Version = v
 		plugin.InterestingEntries = append(plugin.InterestingEntries, readmeURL)
@@ -203,20 +206,19 @@ func detectPluginVersion(ctx context.Context, client *httpclient.Client, target 
 	}
 
 	changelogURL := target.PluginURL(plugin.Slug) + "changelog.txt"
-	if resp, err := client.Get(ctx, changelogURL); err == nil {
-		if v := changelogVersion(resp); v != "" {
-			plugin.Version = v
-			debugf("plugin %s: version %s from changelog.txt", plugin.Slug, v)
-			return
-		}
-		if isBlockedStatus(resp.StatusCode) || (resp.StatusCode == 200 && notRealFile(resp, target)) {
-			blocked = true
-		}
+	if resp, err := client.Get(ctx, changelogURL); err != nil {
+		blocked = true
+	} else if v := changelogVersion(resp); v != "" {
+		plugin.Version = v
+		debugf("plugin %s: version %s from changelog.txt", plugin.Slug, v)
+		return
+	} else if isBlockedStatus(resp.StatusCode) || (resp.StatusCode == 200 && notRealFile(resp, target)) {
+		blocked = true
 	}
 
 	if blocked {
 		plugin.VersionBlocked = true
-		debugf("plugin %s: version could not be confirmed (readme/changelog blocked or soft-404) — vulns not reported as findings", plugin.Slug)
+		debugf("plugin %s: version could not be confirmed (readme/changelog blocked, soft-404, or unreachable) — vulns not reported as findings", plugin.Slug)
 	} else {
 		debugf("plugin %s: version not detected (vulns reported for ALL known versions)", plugin.Slug)
 	}
