@@ -28,3 +28,21 @@ func vulnDB() *vulnDatabase {
 	})
 	return &vulnDBParsed
 }
+
+// VulnDBCount reports how many advisories the embedded database holds, summed
+// across WordPress core, plugins, and themes. It's used for the startup banner;
+// it shares the same cached parse the scan uses, so it adds no extra work.
+func VulnDBCount() int {
+	db := vulnDB()
+	n := 0
+	for _, v := range db.WordPress {
+		n += len(v)
+	}
+	for _, v := range db.Plugins {
+		n += len(v)
+	}
+	for _, v := range db.Themes {
+		n += len(v)
+	}
+	return n
+}

@@ -106,7 +106,7 @@ func EnumerateThemes(ctx context.Context, client *httpclient.Client, target *Tar
 }
 
 // assignThemeVulns attaches vulnerabilities for a theme, except when the version
-// could not be determined — then it stashes the known vulns under
+// could not be determined - then it stashes the known vulns under
 // UnconfirmedVulns (and records the count) instead of presenting them as
 // confirmed findings.
 func assignThemeVulns(t *model.Theme) {
@@ -160,29 +160,28 @@ func aggressiveThemeFinders(ctx context.Context, client *httpclient.Client, targ
 		urls[i] = target.ThemeURL(slug) + "style.css"
 	}
 
-	batchSize := 50
-	for i := 0; i < len(urls); i += batchSize {
-		end := i + batchSize
-		if end > len(urls) {
-			end = len(urls)
-		}
-
-		results := client.BulkGet(ctx, urls[i:end])
-		for j, r := range results {
+	// HEAD each style.css first (no body); only fetch - capped - the ones that
+	// respond 200, so a missing theme's large soft-404 page is never downloaded.
+	for i := 0; i < len(urls); i += pluginBatchSize {
+		end := min(i+pluginBatchSize, len(urls))
+		var getIdx []int
+		for j, r := range client.BulkHead(ctx, urls[i:end]) {
 			if r.Error != nil || r.Response == nil {
 				continue
 			}
-			idx := i + j
-
-			if r.Response.StatusCode != 200 || target.IsSoft404(r.Response) {
+			switch r.Response.StatusCode {
+			case 200, 405, 501:
+				getIdx = append(getIdx, i+j)
+			}
+		}
+		for k, r := range client.BulkGetCapped(ctx, urlsAt(urls, getIdx), probeBodyCap) {
+			if r.Error != nil || r.Response == nil || r.Response.StatusCode != 200 {
 				continue
 			}
-
-			body := string(r.Response.Body)
-			if !strings.Contains(body, "Theme Name") {
+			if target.IsSoft404(r.Response) || !strings.Contains(string(r.Response.Body), "Theme Name") {
 				continue
 			}
-
+			idx := getIdx[k]
 			themes = append(themes, model.Theme{
 				Slug:       slugs[idx],
 				Location:   target.ThemeURL(slugs[idx]),
@@ -197,16 +196,16 @@ func aggressiveThemeFinders(ctx context.Context, client *httpclient.Client, targ
 
 func detectThemeVersion(ctx context.Context, client *httpclient.Client, target *Target, theme *model.Theme) {
 	styleURL := target.ThemeURL(theme.Slug) + "style.css"
-	resp, err := client.Get(ctx, styleURL)
+	resp, err := client.GetCapped(ctx, styleURL, probeBodyCap)
 	if err != nil {
 		theme.VersionBlocked = true
-		debugf("theme %s: style.css request failed (%v) — version could not be confirmed", theme.Slug, err)
+		debugf("theme %s: style.css request failed (%v) - version could not be confirmed", theme.Slug, err)
 		return
 	}
 	if resp.StatusCode != 200 {
 		if isBlockedStatus(resp.StatusCode) {
 			theme.VersionBlocked = true
-			debugf("theme %s: style.css HTTP %d — version detection blocked", theme.Slug, resp.StatusCode)
+			debugf("theme %s: style.css HTTP %d - version detection blocked", theme.Slug, resp.StatusCode)
 		}
 		return
 	}
@@ -214,7 +213,7 @@ func detectThemeVersion(ctx context.Context, client *httpclient.Client, target *
 	parseStyleCSS(string(resp.Body), theme)
 	if theme.Version == "" && notRealFile(resp, target) {
 		theme.VersionBlocked = true
-		debugf("theme %s: style.css 200 but HTML/soft-404 — version not accessible", theme.Slug)
+		debugf("theme %s: style.css 200 but HTML/soft-404 - version not accessible", theme.Slug)
 	}
 }
 

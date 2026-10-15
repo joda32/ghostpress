@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,9 +51,11 @@ type CLIFormatter struct {
 	w               io.Writer
 	p               palette
 	showUnconfirmed bool
+	version         string
+	dbCount         int
 }
 
-func NewCLI(noColor bool, output *os.File, showUnconfirmed bool) *CLIFormatter {
+func NewCLI(noColor bool, output *os.File, showUnconfirmed bool, version string, dbCount int) *CLIFormatter {
 	w := io.Writer(os.Stdout)
 	if output != nil {
 		w = output
@@ -66,7 +69,13 @@ func NewCLI(noColor bool, output *os.File, showUnconfirmed bool) *CLIFormatter {
 			colour = info.Mode()&os.ModeCharDevice != 0
 		}
 	}
-	return &CLIFormatter{w: w, p: newPalette(colour), showUnconfirmed: showUnconfirmed}
+	return &CLIFormatter{
+		w:               w,
+		p:               newPalette(colour),
+		showUnconfirmed: showUnconfirmed,
+		version:         version,
+		dbCount:         dbCount,
+	}
 }
 
 func (f *CLIFormatter) pr(format string, args ...any) {
@@ -85,15 +94,76 @@ func (f *CLIFormatter) section(text string) {
 }
 
 func (f *CLIFormatter) Banner() {
-	banner := `
-                ░██████╗░██████╗░
-                ██╔════╝░██╔══██╗
-                ██║░░██╗░██████╔╝   %s%sghostpress%s
-                ██║░░╚██╗██╔═══╝    %sWordPress Security Auditor%s
-                ╚██████╔╝██║
-                ░╚═════╝░╚═╝
-`
-	f.pr(banner, f.p.bold, f.p.name, f.p.reset, f.p.dim, f.p.reset)
+	colorOn := f.p.reset != ""
+	tc := func(r, g, b int) string {
+		if !colorOn {
+			return ""
+		}
+		return fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r, g, b)
+	}
+
+	// A little sheet-ghost, shaded top-to-bottom from a pale glow down to a deep
+	// toxic green, with a pair of glowing eyes - a haunted, radioactive specter.
+	// Each art row has the same visible width, so the text column to its right
+	// stays aligned regardless of row.
+	rows := []string{
+		"      ▄███▄      ",
+		"   ▄█████████▄   ",
+		" ▄█████████████▄ ",
+		" ███████████████ ",
+		" ███  ●   ●  ███ ",
+		" ███████████████ ",
+		" ███▀▀██▀▀██▀▀██ ",
+	}
+	ramp := [7][3]int{
+		{198, 252, 214},
+		{150, 240, 176},
+		{104, 224, 140},
+		{72, 206, 112},
+		{72, 206, 112}, // eyes row body
+		{48, 180, 92},
+		{30, 150, 74},
+	}
+	const eyeRow = 4
+	eye := tc(255, 196, 76) // glowing amber eyes
+
+	// Right-hand column: name, tagline, and version / database info. The name is
+	// tinted green to sit with the ghost rather than clash against it.
+	text := map[int]string{
+		1: fmt.Sprintf("%s%sghostpress%s", f.p.bold, tc(80, 250, 123), f.p.reset),
+		2: fmt.Sprintf("%s· WordPress Security Auditor%s", f.p.dim, f.p.reset),
+		4: fmt.Sprintf("%sVersion%s    %s", f.p.dim, f.p.reset, f.version),
+		5: fmt.Sprintf("%sDatabase%s   %s advisories", f.p.dim, f.p.reset, humanInt(f.dbCount)),
+	}
+
+	f.pr("\n")
+	for i, row := range rows {
+		var art string
+		if i == eyeRow && colorOn {
+			body := tc(ramp[i][0], ramp[i][1], ramp[i][2])
+			art = body + strings.NewReplacer("●", eye+"●"+body).Replace(row) + f.p.reset
+		} else {
+			art = tc(ramp[i][0], ramp[i][1], ramp[i][2]) + row + f.p.reset
+		}
+		f.pr("  %s    %s\n", art, text[i])
+	}
+	f.pr("\n")
+}
+
+// humanInt formats a count with thousands separators (e.g. 48213 -> "48,213").
+func humanInt(n int) string {
+	s := strconv.Itoa(n)
+	if n < 0 {
+		return s
+	}
+	var b strings.Builder
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(c)
+	}
+	return b.String()
 }
 
 func (f *CLIFormatter) ScanStarted(target model.TargetInfo) {
@@ -109,7 +179,7 @@ func (f *CLIFormatter) ScanStarted(target model.TargetInfo) {
 		f.pr("  %s%-12s%s %s\n", f.p.method, "Server", f.p.reset, target.Server)
 	}
 	if !target.WordPressFound {
-		f.pr("\n  %s%sWordPress not detected — use --force to scan anyway%s\n", f.p.bold, f.p.high, f.p.reset)
+		f.pr("\n  %s%sWordPress not detected - use --force to scan anyway%s\n", f.p.bold, f.p.high, f.p.reset)
 	}
 }
 
@@ -144,7 +214,7 @@ func (f *CLIFormatter) Version(version *model.WPVersion) {
 
 	label := "Version"
 	if len(version.Vulnerabilities) > 0 {
-		label = fmt.Sprintf("Version — %d vulnerabilities", len(version.Vulnerabilities))
+		label = fmt.Sprintf("Version - %d vulnerabilities", len(version.Vulnerabilities))
 	}
 	f.heading(colour, label, 1)
 	f.pr("  %sWordPress %s%s\n", f.p.name, version.Number, f.p.reset)
@@ -167,7 +237,7 @@ func (f *CLIFormatter) MainTheme(theme *model.Theme) {
 
 	label := "Active Theme"
 	if len(theme.Vulnerabilities) > 0 {
-		label = fmt.Sprintf("Active Theme — %d vulnerabilities", len(theme.Vulnerabilities))
+		label = fmt.Sprintf("Active Theme - %d vulnerabilities", len(theme.Vulnerabilities))
 	}
 	f.heading(colour, label, 1)
 
@@ -196,8 +266,13 @@ func (f *CLIFormatter) MainTheme(theme *model.Theme) {
 // which are known for the component across all versions and may not apply to the
 // version actually installed.
 func (f *CLIFormatter) unconfirmed(knownCount int, vulns []model.Vulnerability) {
+	if knownCount == 0 {
+		// Version couldn't be confirmed, but the DB has no vulns for this slug
+		// anyway - nothing to warn about; the "unknown (unconfirmed)" label suffices.
+		return
+	}
 	if f.showUnconfirmed {
-		f.pr("      %s%-7s%s %s⚠ --show-unconfirmed: version could not be detected — the %d vulnerabilities below are known for this component across ALL versions and may NOT apply to the installed version%s\n",
+		f.pr("      %s%-7s%s %s⚠ --show-unconfirmed: version could not be detected - the %d vulnerabilities below are known for this component across ALL versions and may NOT apply to the installed version%s\n",
 			f.p.method, "Note", f.p.reset, f.p.high, knownCount, f.p.reset)
 		f.printVulns(vulns)
 		return
@@ -224,7 +299,7 @@ func (f *CLIFormatter) Plugins(plugins []model.Plugin) {
 	label := "Plugins"
 	if vulnCount > 0 {
 		colour = f.p.high
-		label = fmt.Sprintf("Plugins — %d vulnerabilities", vulnCount)
+		label = fmt.Sprintf("Plugins - %d vulnerabilities", vulnCount)
 	}
 	f.heading(colour, label, len(plugins))
 
@@ -266,7 +341,7 @@ func (f *CLIFormatter) Themes(themes []model.Theme) {
 	label := "Themes"
 	if vulnCount > 0 {
 		colour = f.p.high
-		label = fmt.Sprintf("Themes — %d vulnerabilities", vulnCount)
+		label = fmt.Sprintf("Themes - %d vulnerabilities", vulnCount)
 	}
 	f.heading(colour, label, len(themes))
 
@@ -410,7 +485,7 @@ func (f *CLIFormatter) ScanFinished(result *model.ScanResult) {
 	}
 
 	if result.RateLimited > 0 || result.Forbidden > 0 {
-		f.pr("%s%s⚠ interference detected: %d rate-limited (429/503), %d forbidden (403) — the target is likely behind a WAF; some version detection was blocked and results may be incomplete%s\n",
+		f.pr("%s%s⚠ interference detected: %d rate-limited (429/503), %d forbidden (403) - the target is likely behind a WAF; some version detection was blocked and results may be incomplete%s\n",
 			f.p.bold, f.p.high, result.RateLimited, result.Forbidden, f.p.reset)
 	}
 
@@ -427,7 +502,7 @@ func (f *CLIFormatter) ScanFinished(result *model.ScanResult) {
 	if unconfirmed > 0 {
 		hint := ""
 		if !f.showUnconfirmed {
-			hint = " — re-run with --show-unconfirmed to list them"
+			hint = " - re-run with --show-unconfirmed to list them"
 		}
 		f.pr("%s%s⚠ %d additional vulnerabilities are known for components whose version could not be confirmed (not counted above)%s%s\n",
 			f.p.bold, f.p.high, unconfirmed, hint, f.p.reset)

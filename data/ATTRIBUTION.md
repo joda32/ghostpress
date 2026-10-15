@@ -1,11 +1,11 @@
 # Data attribution
 
-## Vulnerability data — Wordfence Intelligence (Defiant Inc.)
+## Vulnerability data - Wordfence Intelligence (Defiant Inc.)
 
 `vulndb.json` / `vulndb.json.gz` is generated from the **Wordfence Intelligence
 v3 Vulnerability Data Feed**.
 
-> Copyright 2012–present Defiant Inc.
+> Copyright 2012-present Defiant Inc.
 >
 > Defiant grants a perpetual, worldwide, non-exclusive, no-charge, royalty-free,
 > irrevocable copyright license to reproduce, prepare derivative works of,
@@ -32,6 +32,6 @@ Do not strip either when redistributing the database.
 
 ## Enrichment sources
 
-- **ExploitDB** — CVE↔exploit-id mappings (facts), from the public Exploit-Database `files_exploits.csv`.
-- **GitHub PoC references** (optional) — public repository URLs from `nomi-sec/PoC-in-GitHub`.
+- **ExploitDB** - CVE↔exploit-id mappings (facts), from the public Exploit-Database `files_exploits.csv`.
+- **GitHub PoC references** (optional) - public repository URLs from `nomi-sec/PoC-in-GitHub`.
 - Legacy builds also used **NVD / NIST** CVE data (public domain).

@@ -192,9 +192,18 @@ func New(opts Options) (*Client, error) {
 	return c, nil
 }
 
-func (c *Client) do(ctx context.Context, method, rawURL string, body io.Reader, contentType string) (*Response, error) {
+// defaultMaxBody bounds how much of a response body is buffered when no explicit
+// cap is given. Callers probing for existence/version pass a much smaller cap via
+// the *Capped helpers so large soft-404 / error pages aren't read in full.
+const defaultMaxBody = 10 * 1024 * 1024
+
+func (c *Client) do(ctx context.Context, method, rawURL string, body io.Reader, contentType string, maxBody int64) (*Response, error) {
 	c.sem <- struct{}{}
 	defer func() { <-c.sem }()
+
+	if maxBody <= 0 {
+		maxBody = defaultMaxBody
+	}
 
 	// Buffer the body so the request can be rebuilt on retry.
 	var bodyBytes []byte
@@ -244,7 +253,7 @@ func (c *Client) do(ctx context.Context, method, rawURL string, body io.Reader, 
 			return nil, err
 		}
 
-		respBody, rerr := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+		respBody, rerr := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 		resp.Body.Close()
 		if rerr != nil {
 			c.dbg(method, rawURL, resp.StatusCode, len(respBody), time.Since(start), rerr)
@@ -300,15 +309,22 @@ func (c *Client) dbg(method, url string, status, n int, dur time.Duration, err e
 }
 
 func (c *Client) Get(ctx context.Context, url string) (*Response, error) {
-	return c.do(ctx, http.MethodGet, url, nil, "")
+	return c.do(ctx, http.MethodGet, url, nil, "", 0)
+}
+
+// GetCapped is Get but buffers at most maxBody bytes of the response. Use it for
+// existence/version probes where only a small prefix is inspected, so a large
+// soft-404 or error page isn't read in full.
+func (c *Client) GetCapped(ctx context.Context, url string, maxBody int64) (*Response, error) {
+	return c.do(ctx, http.MethodGet, url, nil, "", maxBody)
 }
 
 func (c *Client) Head(ctx context.Context, url string) (*Response, error) {
-	return c.do(ctx, http.MethodHead, url, nil, "")
+	return c.do(ctx, http.MethodHead, url, nil, "", 0)
 }
 
 func (c *Client) Post(ctx context.Context, url string, contentType string, body []byte) (*Response, error) {
-	return c.do(ctx, http.MethodPost, url, strings.NewReader(string(body)), contentType)
+	return c.do(ctx, http.MethodPost, url, strings.NewReader(string(body)), contentType, 0)
 }
 
 func (c *Client) PostWithCookie(ctx context.Context, rawURL string, contentType string, body []byte, cookie string) (*Response, error) {
@@ -407,14 +423,19 @@ type BulkResult struct {
 }
 
 func (c *Client) BulkHead(ctx context.Context, urls []string) []BulkResult {
-	return c.bulk(ctx, http.MethodHead, urls)
+	return c.bulk(ctx, http.MethodHead, urls, 0)
 }
 
 func (c *Client) BulkGet(ctx context.Context, urls []string) []BulkResult {
-	return c.bulk(ctx, http.MethodGet, urls)
+	return c.bulk(ctx, http.MethodGet, urls, 0)
 }
 
-func (c *Client) bulk(ctx context.Context, method string, urls []string) []BulkResult {
+// BulkGetCapped is BulkGet but buffers at most maxBody bytes of each response.
+func (c *Client) BulkGetCapped(ctx context.Context, urls []string, maxBody int64) []BulkResult {
+	return c.bulk(ctx, http.MethodGet, urls, maxBody)
+}
+
+func (c *Client) bulk(ctx context.Context, method string, urls []string, maxBody int64) []BulkResult {
 	results := make([]BulkResult, len(urls))
 	var wg sync.WaitGroup
 
@@ -430,7 +451,7 @@ func (c *Client) bulk(ctx context.Context, method string, urls []string) []BulkR
 			default:
 			}
 
-			resp, err := c.do(ctx, method, rawURL, nil, "")
+			resp, err := c.do(ctx, method, rawURL, nil, "", maxBody)
 			results[idx] = BulkResult{URL: rawURL, Response: resp, Error: err}
 		}(i, u)
 	}

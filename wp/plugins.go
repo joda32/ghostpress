@@ -51,7 +51,7 @@ func EnumeratePlugins(ctx context.Context, client *httpclient.Client, target *Ta
 		}
 		if p.VersionBlocked {
 			// Version couldn't be determined (WAF block, soft-404, or transport
-			// error) — do not present the full historical vuln list as live
+			// error) - do not present the full historical vuln list as live
 			// findings. Keep the known list under UnconfirmedVulns so a report (or
 			// --show-unconfirmed) can surface them, flagged as unconfirmed.
 			p.UnconfirmedVulns = lookupPluginVulns(p.Slug, "")
@@ -90,59 +90,70 @@ func passivePluginFinders(target *Target) []model.Plugin {
 	return plugins
 }
 
+// probeBodyCap bounds how much of a probe response (plugin dir index, readme.txt,
+// style.css) is buffered: the markers we look for ("Index of", "Stable tag:",
+// "Theme Name") are all near the top, so there's no need to read a large
+// soft-404 / error page in full.
+const probeBodyCap = 64 * 1024
+
+const pluginBatchSize = 50
+
 func aggressivePluginFinders(ctx context.Context, client *httpclient.Client, target *Target, slugs []string) []model.Plugin {
 	var plugins []model.Plugin
+	foundSlugs := make(map[string]bool)
 
 	urls := make([]string, len(slugs))
 	for i, slug := range slugs {
 		urls[i] = target.PluginURL(slug)
 	}
 
-	batchSize := 50
-	for i := 0; i < len(urls); i += batchSize {
-		end := i + batchSize
-		if end > len(urls) {
-			end = len(urls)
-		}
-
-		results := client.BulkGet(ctx, urls[i:end])
-		for j, r := range results {
+	// Phase 1: HEAD each plugin directory (no body). A 403 is a positive hit
+	// (dir exists, listing denied). A 200 is ambiguous - only those get a capped
+	// GET to check for a directory listing. Everything else (usually 404) is
+	// dropped without downloading the server's often-large error page.
+	for i := 0; i < len(urls); i += pluginBatchSize {
+		end := min(i+pluginBatchSize, len(urls))
+		var getIdx []int
+		for j, r := range client.BulkHead(ctx, urls[i:end]) {
 			if r.Error != nil || r.Response == nil {
 				continue
 			}
-
 			idx := i + j
-			slug := slugs[idx]
-
-			if r.Response.StatusCode == 403 {
+			switch {
+			case r.Response.StatusCode == 403:
 				plugins = append(plugins, model.Plugin{
-					Slug:       slug,
+					Slug:       slugs[idx],
 					Location:   urls[idx],
 					FoundBy:    "Known Locations (Aggressive)",
 					Confidence: 80,
 				})
+				foundSlugs[slugs[idx]] = true
+			case r.Response.StatusCode == 200 || r.Response.StatusCode == 405 || r.Response.StatusCode == 501:
+				getIdx = append(getIdx, idx)
+			}
+		}
+		for k, r := range client.BulkGetCapped(ctx, urlsAt(urls, getIdx), probeBodyCap) {
+			if r.Error != nil || r.Response == nil || r.Response.StatusCode != 200 {
 				continue
 			}
-
-			if r.Response.StatusCode == 200 && !target.IsSoft404(r.Response) {
-				if isDirectoryListing(string(r.Response.Body)) {
-					plugins = append(plugins, model.Plugin{
-						Slug:             slug,
-						Location:         urls[idx],
-						FoundBy:          "Known Locations (Aggressive)",
-						Confidence:       100,
-						DirectoryListing: true,
-					})
-				}
+			if target.IsSoft404(r.Response) || !isDirectoryListing(string(r.Response.Body)) {
+				continue
 			}
+			idx := getIdx[k]
+			plugins = append(plugins, model.Plugin{
+				Slug:             slugs[idx],
+				Location:         urls[idx],
+				FoundBy:          "Known Locations (Aggressive)",
+				Confidence:       100,
+				DirectoryListing: true,
+			})
+			foundSlugs[slugs[idx]] = true
 		}
 	}
 
-	// also check via readme.txt for plugins not yet found
-	foundSlugs := make(map[string]bool)
-	for _, p := range plugins {
-		foundSlugs[p.Slug] = true
-	}
+	// Phase 2: for slugs not yet found, HEAD readme.txt. A non-HTML 200 is very
+	// likely a real readme - confirm with a capped GET (only those few), so we
+	// never pull a readme-shaped soft-404 body for every miss.
 	var readmeURLs []string
 	var readmeSlugs []string
 	for _, slug := range slugs {
@@ -152,24 +163,25 @@ func aggressivePluginFinders(ctx context.Context, client *httpclient.Client, tar
 		readmeURLs = append(readmeURLs, target.PluginURL(slug)+"readme.txt")
 		readmeSlugs = append(readmeSlugs, slug)
 	}
-
-	for i := 0; i < len(readmeURLs); i += batchSize {
-		end := i + batchSize
-		if end > len(readmeURLs) {
-			end = len(readmeURLs)
-		}
-		results := client.BulkGet(ctx, readmeURLs[i:end])
-		for j, r := range results {
+	for i := 0; i < len(readmeURLs); i += pluginBatchSize {
+		end := min(i+pluginBatchSize, len(readmeURLs))
+		var getIdx []int
+		for j, r := range client.BulkHead(ctx, readmeURLs[i:end]) {
 			if r.Error != nil || r.Response == nil || r.Response.StatusCode != 200 {
 				continue
 			}
-			ct := r.Response.Headers.Get("Content-Type")
-			if strings.Contains(ct, "text/html") {
+			if strings.Contains(strings.ToLower(r.Response.Headers.Get("Content-Type")), "text/html") {
+				continue // soft-404 HTML page, not a readme
+			}
+			getIdx = append(getIdx, i+j)
+		}
+		for k, r := range client.BulkGetCapped(ctx, urlsAt(readmeURLs, getIdx), probeBodyCap) {
+			if r.Error != nil || r.Response == nil || r.Response.StatusCode != 200 {
 				continue
 			}
 			body := string(r.Response.Body)
 			if strings.Contains(body, "=== ") || strings.Contains(body, "Stable tag:") {
-				idx := i + j
+				idx := getIdx[k]
 				plugins = append(plugins, model.Plugin{
 					Slug:       readmeSlugs[idx],
 					Location:   target.PluginURL(readmeSlugs[idx]),
@@ -183,13 +195,22 @@ func aggressivePluginFinders(ctx context.Context, client *httpclient.Client, tar
 	return plugins
 }
 
+// urlsAt gathers the URLs at the given indices, preserving order.
+func urlsAt(urls []string, idx []int) []string {
+	out := make([]string, len(idx))
+	for i, j := range idx {
+		out[i] = urls[j]
+	}
+	return out
+}
+
 func detectPluginVersion(ctx context.Context, client *httpclient.Client, target *Target, plugin *model.Plugin) {
 	blocked := false
 
 	readmeURL := target.PluginURL(plugin.Slug) + "readme.txt"
-	if resp, err := client.Get(ctx, readmeURL); err != nil {
+	if resp, err := client.GetCapped(ctx, readmeURL, probeBodyCap); err != nil {
 		blocked = true
-		debugf("plugin %s: readme.txt request failed (%v) — treated as unreachable", plugin.Slug, err)
+		debugf("plugin %s: readme.txt request failed (%v) - treated as unreachable", plugin.Slug, err)
 	} else if v := stableTagVersion(resp); v != "" {
 		plugin.Version = v
 		plugin.InterestingEntries = append(plugin.InterestingEntries, readmeURL)
@@ -197,16 +218,16 @@ func detectPluginVersion(ctx context.Context, client *httpclient.Client, target 
 		return
 	} else if isBlockedStatus(resp.StatusCode) {
 		blocked = true
-		debugf("plugin %s: readme.txt HTTP %d — blocked", plugin.Slug, resp.StatusCode)
+		debugf("plugin %s: readme.txt HTTP %d - blocked", plugin.Slug, resp.StatusCode)
 	} else if resp.StatusCode == 200 && notRealFile(resp, target) {
 		blocked = true
-		debugf("plugin %s: readme.txt 200 but HTML/soft-404 (%d bytes) — readme not accessible", plugin.Slug, len(resp.Body))
+		debugf("plugin %s: readme.txt 200 but HTML/soft-404 (%d bytes) - readme not accessible", plugin.Slug, len(resp.Body))
 	} else {
 		debugf("plugin %s: readme.txt HTTP %d, no 'Stable tag'", plugin.Slug, resp.StatusCode)
 	}
 
 	changelogURL := target.PluginURL(plugin.Slug) + "changelog.txt"
-	if resp, err := client.Get(ctx, changelogURL); err != nil {
+	if resp, err := client.GetCapped(ctx, changelogURL, probeBodyCap); err != nil {
 		blocked = true
 	} else if v := changelogVersion(resp); v != "" {
 		plugin.Version = v
@@ -218,7 +239,7 @@ func detectPluginVersion(ctx context.Context, client *httpclient.Client, target 
 
 	if blocked {
 		plugin.VersionBlocked = true
-		debugf("plugin %s: version could not be confirmed (readme/changelog blocked, soft-404, or unreachable) — vulns not reported as findings", plugin.Slug)
+		debugf("plugin %s: version could not be confirmed (readme/changelog blocked, soft-404, or unreachable) - vulns not reported as findings", plugin.Slug)
 	} else {
 		debugf("plugin %s: version not detected (vulns reported for ALL known versions)", plugin.Slug)
 	}
@@ -257,7 +278,7 @@ func changelogVersion(resp *httpclient.Response) string {
 }
 
 // notRealFile reports whether a 200 response is not the plain-text file we asked
-// for — i.e. an HTML soft-404 / security page — so it must not be parsed as a
+// for - i.e. an HTML soft-404 / security page - so it must not be parsed as a
 // readme/style/changelog.
 func notRealFile(resp *httpclient.Response, target *Target) bool {
 	if strings.Contains(strings.ToLower(resp.Headers.Get("Content-Type")), "text/html") {

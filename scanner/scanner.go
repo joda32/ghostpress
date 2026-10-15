@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"ghostpress/data"
@@ -61,6 +62,13 @@ func (s *Scanner) Run(ctx context.Context) *model.ScanResult {
 	target, err := wp.NewTarget(ctx, s.client, s.opts.URL, s.opts.Force)
 	if err != nil {
 		result.Error = fmt.Sprintf("Failed to connect to target: %s", err)
+		// Only certificate-*verification* failures are cured by --disable-tls-checks
+		// (it sets InsecureSkipVerify). Other TLS handshake alerts - e.g.
+		// "tls: unrecognized name" (server has no vhost/cert for this SNI) - are
+		// server-side and that flag won't help, so don't suggest it misleadingly.
+		if es := err.Error(); strings.Contains(es, "x509") || strings.Contains(es, "certificate") {
+			result.Error += "\n  hint: the target's TLS certificate failed verification - re-run with --disable-tls-checks to scan anyway"
+		}
 		s.out.Error(result.Error)
 		result.EndTime = time.Now()
 		return result

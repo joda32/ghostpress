@@ -5,6 +5,11 @@
 *.exe
 /dist/
 
+# Generated / local-only artefacts
+/scratchpad/
+/graphify-out/
+# re-stylable recording source, kept locally; the GIF ships
+/assets/demo.cast
 
 # Orphaned raw DB snapshot (the embedded copy is vulndb.json.gz)
 /data/vulndb.json

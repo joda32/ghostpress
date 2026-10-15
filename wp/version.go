@@ -35,7 +35,7 @@ func DetectVersion(ctx context.Context, client *httpclient.Client, target *Targe
 	}
 
 	if best.Confidence < 40 {
-		debugf("version: best candidate %q conf %d below threshold 40 — not reported", best.Number, best.Confidence)
+		debugf("version: best candidate %q conf %d below threshold 40 - not reported", best.Number, best.Confidence)
 		return nil
 	}
 

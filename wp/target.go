@@ -111,14 +111,50 @@ func (t *Target) detectWordPress(resp *httpclient.Response) bool {
 	return false
 }
 
+var contentDirRe = regexp.MustCompile(`(?i)(https?://[^/"'\s]+)?/([a-z0-9][a-z0-9._-]*)/(?:plugins|themes)/`)
+
+// detectContentDir infers the wp-content directory name (it is often renamed,
+// e.g. "app" on Bedrock sites). It must ignore third-party URLs in the markup:
+// Yoast SEO, for one, stamps a literal https://yoast.com/wordpress/plugins/seo/
+// link into every page's <head>, and naively taking the first /<dir>/plugins/
+// match there yields "wordpress", which breaks all plugin/theme probing. So we
+// only count matches that are site-relative or on the target's own host, and
+// pick the most frequent directory (the real content dir dominates by count).
 func (t *Target) detectContentDir() {
 	body := string(t.Homepage)
 
-	re := regexp.MustCompile(`(?i)/([^/]+)/(?:plugins|themes)/`)
-	matches := re.FindStringSubmatch(body)
-	if len(matches) > 1 {
-		t.ContentDir = matches[1]
+	host := ""
+	if u, err := url.Parse(t.EffectiveURL); err == nil {
+		host = u.Hostname()
 	}
+
+	counts := make(map[string]int)
+	for _, m := range contentDirRe.FindAllStringSubmatch(body, -1) {
+		if m[1] != "" { // absolute URL - only trust it if it's the target's own host
+			hu, err := url.Parse(m[1])
+			if err != nil || !sameHost(hu.Hostname(), host) {
+				continue
+			}
+		}
+		counts[strings.ToLower(m[2])]++
+	}
+
+	best, bestN := "", 0
+	for dir, n := range counts {
+		if n > bestN {
+			best, bestN = dir, n
+		}
+	}
+	if best != "" {
+		t.ContentDir = best
+	}
+}
+
+// sameHost compares two hostnames, treating a leading "www." as equivalent.
+func sameHost(a, b string) bool {
+	a = strings.TrimPrefix(strings.ToLower(a), "www.")
+	b = strings.TrimPrefix(strings.ToLower(b), "www.")
+	return a != "" && a == b
 }
 
 func (t *Target) PluginURL(slug string) string {

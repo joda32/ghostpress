@@ -37,6 +37,34 @@ func TestRetryOn429(t *testing.T) {
 	}
 }
 
+func TestGetCappedTruncatesBody(t *testing.T) {
+	// Server returns a 1 MiB body; a capped GET must buffer only the cap.
+	big := make([]byte, 1024*1024)
+	for i := range big {
+		big[i] = 'a'
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write(big)
+	}))
+	defer srv.Close()
+
+	c, _ := New(Options{Threads: 1})
+	resp, err := c.GetCapped(context.Background(), srv.URL, 8*1024)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Body) != 8*1024 {
+		t.Fatalf("expected body capped to 8192 bytes, got %d", len(resp.Body))
+	}
+
+	// An uncapped GET of the same resource reads it all.
+	full, _ := c.Get(context.Background(), srv.URL)
+	if len(full.Body) != len(big) {
+		t.Fatalf("expected full body %d, got %d", len(big), len(full.Body))
+	}
+}
+
 func TestForbiddenCountedNotRetried(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -21,13 +21,19 @@ import (
 	"ghostpress/model"
 	"ghostpress/output"
 	"ghostpress/scanner"
+	"ghostpress/wp"
 
 	"github.com/spf13/cobra"
 )
 
 var (
-	version   = "dev"
-	vulnDBURL = ""
+	version = "dev"
+	// vulnDBURL is where `ghostpress update` fetches the vulnerability database
+	// from by default. It points at the rolling "vulndb-latest" release asset in
+	// the joda32/ghostpress repo, which the update-vulndb workflow republishes
+	// from the Wordfence feed. Override with --url, or at build time via
+	// -ldflags "-X main.vulnDBURL=...".
+	vulnDBURL = "https://github.com/joda32/ghostpress/releases/download/vulndb-latest/vulndb.json.gz"
 )
 
 func main() {
@@ -39,6 +45,9 @@ func main() {
 		Short: "WordPress Security Auditor",
 		Long:  "Ghostpress - A fast, portable WordPress security scanner written in Go.",
 		Args:  cobra.ExactArgs(1),
+		// Errors are surfaced by the scanner/report itself; don't dump the full
+		// usage text after a runtime failure (e.g. TLS error, connection refused).
+		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.URL = args[0]
 			return runScan(opts, enumerate)
@@ -141,7 +150,7 @@ func runScan(opts model.ScanOptions, enumerate string) error {
 		formatter = output.NewJSON(outFile)
 	default:
 		noColor := outFile != nil
-		formatter = output.NewCLI(noColor, outFile, opts.ShowUnconfirmed)
+		formatter = output.NewCLI(noColor, outFile, opts.ShowUnconfirmed, version, wp.VulnDBCount())
 	}
 
 	s, err := scanner.New(opts, formatter)
@@ -162,7 +171,10 @@ func runScan(opts model.ScanOptions, enumerate string) error {
 
 	result := s.Run(ctx)
 	if result.Error != "" && !result.Target.WordPressFound {
-		return fmt.Errorf("%s", result.Error)
+		// The failure was already shown (scanner's error line, or the report's
+		// "WordPress not detected" notice). Exit non-zero without returning the
+		// error, so cobra doesn't print a redundant second copy.
+		os.Exit(1)
 	}
 
 	if result.Vulnerable() {

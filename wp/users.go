@@ -72,7 +72,7 @@ func passiveUserFinders(target *Target) []model.User {
 	}
 
 	// WordPress adds `author-<nicename>` to the <body> tag on author archive
-	// pages. Scope strictly to the body tag's class list — matching author-*
+	// pages. Scope strictly to the body tag's class list - matching author-*
 	// anywhere on the page harvests generic component classes (author-box,
 	// author-name, author-avatar, …) as bogus usernames.
 	if bt := bodyOpenTagRe.FindStringSubmatch(body); len(bt) > 1 {
@@ -216,7 +216,7 @@ func authorSitemapUsers(ctx context.Context, client *httpclient.Client, target *
 			break
 		}
 		if notRealFile(resp, target) {
-			debugf("users: %s 200 but HTML/soft-404 — not a real sitemap, skipping", url)
+			debugf("users: %s 200 but HTML/soft-404 - not a real sitemap, skipping", url)
 			break
 		}
 		n := extract(string(resp.Body))
@@ -232,7 +232,7 @@ func authorSitemapUsers(ctx context.Context, client *httpclient.Client, target *
 	}
 
 	if len(users) > 500 {
-		debugf("users: author sitemap(s) returned %d entries — large author list, output may be voluminous", len(users))
+		debugf("users: author sitemap(s) returned %d entries - large author list, output may be voluminous", len(users))
 	}
 	return users
 }
