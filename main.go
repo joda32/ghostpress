@@ -38,6 +38,11 @@ var (
 	// signatures from by default - a rolling release asset, like the vuln DB.
 	// Override with --signatures-url or at build time via -ldflags.
 	signaturesURL = "https://github.com/joda32/ghostpress/releases/download/signatures-latest/signatures.json"
+	// fingerprintsURL is where `ghostpress update` fetches the WordPress core
+	// version-fingerprint DB from by default - a rolling release asset, like the
+	// vuln DB. Refreshing it lets ghostpress fingerprint newly released WordPress
+	// versions without a rebuild. Override with --fingerprints-url or -ldflags.
+	fingerprintsURL = "https://github.com/joda32/ghostpress/releases/download/fingerprints-latest/wp_fingerprints.json"
 )
 
 func main() {
@@ -89,6 +94,8 @@ func main() {
 	flags.StringVar(&opts.PluginsSlugs, "plugins-list", "", "File of plugin slugs to check (one per line; default: built-in popular list)")
 	flags.StringVar(&opts.ThemesSlugs, "themes-list", "", "File of theme slugs to check (one per line; default: built-in popular list)")
 	flags.StringVar(&opts.SignaturesFile, "signatures", "", "File of WAF/misconfiguration signatures to use (JSON; default: ~/.ghostpress/signatures.json or the built-in set)")
+	flags.StringVar(&opts.FingerprintsFile, "fingerprints", "", "File of WordPress core version fingerprints to use (JSON; default: ~/.ghostpress/wp_fingerprints.json or the built-in set)")
+	flags.BoolVar(&opts.NoWPAPI, "no-wp-api", false, "Disable api.wordpress.org checksum verification of the core version (keeps detection fully offline)")
 
 	flags.StringVar(&opts.Passwords, "passwords", "", "Path to password wordlist file")
 	flags.StringSliceVar(&opts.Usernames, "usernames", nil, "Usernames to attack (default: enumerated users)")
@@ -113,20 +120,24 @@ func main() {
 	}
 	rootCmd.AddCommand(versionCmd)
 
-	var updateURL, updateSigURL string
+	var updateURL, updateSigURL, updateFpURL string
 	updateCmd := &cobra.Command{
 		Use:   "update",
-		Short: "Update the vulnerability database and signatures",
+		Short: "Update the vulnerability database, signatures, and version fingerprints",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := updateVulnDB(updateURL); err != nil {
 				return err
 			}
-			return updateSignatures(updateSigURL)
+			if err := updateSignatures(updateSigURL); err != nil {
+				return err
+			}
+			return updateFingerprints(updateFpURL)
 		},
 	}
 	updateCmd.Flags().StringVar(&updateURL, "url", vulnDBURL, "URL to fetch vulndb.json from")
 	updateCmd.Flags().StringVar(&updateSigURL, "signatures-url", signaturesURL, "URL to fetch signatures.json from")
+	updateCmd.Flags().StringVar(&updateFpURL, "fingerprints-url", fingerprintsURL, "URL to fetch wp_fingerprints.json from")
 	rootCmd.AddCommand(updateCmd)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -136,6 +147,7 @@ func main() {
 
 func runScan(opts model.ScanOptions, enumerate string) error {
 	data.SetSignaturesOverride(opts.SignaturesFile)
+	data.SetFingerprintsOverride(opts.FingerprintsFile)
 	parseEnumerate(enumerate, &opts.Enumerate)
 
 	if !opts.Enumerate.Any() {
@@ -332,6 +344,71 @@ func updateSignatures(rawURL string) error {
 	fmt.Printf("[+] Signatures updated: %s\n", localPath)
 	fmt.Printf("    WAF signatures:   %d\n", len(sig.WAF))
 	fmt.Printf("    Misconfig checks: %d\n", len(sig.Misconfig))
+	return nil
+}
+
+// updateFingerprints refreshes the WordPress core version-fingerprint DB from a
+// release asset. Like updateSignatures it is best-effort: a missing or
+// unreachable asset warns rather than failing the update, so the rest still
+// counts. Refreshing it is how ghostpress learns to fingerprint WordPress
+// versions released after the binary was built.
+func updateFingerprints(rawURL string) error {
+	if rawURL == "" {
+		return nil
+	}
+
+	fmt.Printf("[*] Downloading version fingerprints from:\n    %s\n", rawURL)
+
+	client := &http.Client{Timeout: 60 * time.Second}
+
+	body, err := fetchURL(client, rawURL)
+	if err != nil {
+		fmt.Printf("[!] Fingerprints not updated: %v\n", err)
+		return nil
+	}
+
+	if sum, serr := fetchURL(client, rawURL+".sha256"); serr == nil {
+		want := strings.ToLower(strings.Fields(string(sum))[0])
+		got := fmt.Sprintf("%x", sha256.Sum256(body))
+		if _, derr := hex.DecodeString(want); derr == nil && want != got {
+			fmt.Printf("[!] Fingerprints checksum mismatch; not updated\n")
+			return nil
+		}
+		fmt.Printf("[*] Checksum verified\n")
+	}
+
+	jsonBody := body
+	if len(body) >= 2 && body[0] == 0x1f && body[1] == 0x8b {
+		r, gerr := gzip.NewReader(bytes.NewReader(body))
+		if gerr != nil {
+			fmt.Printf("[!] Fingerprints not updated: %v\n", gerr)
+			return nil
+		}
+		jsonBody, err = io.ReadAll(io.LimitReader(r, 50*1024*1024))
+		r.Close()
+		if err != nil {
+			fmt.Printf("[!] Fingerprints not updated: %v\n", err)
+			return nil
+		}
+	}
+
+	// Validate shape: {filepath: {md5: [versions...]}}.
+	var fp map[string]map[string][]string
+	if err := json.Unmarshal(jsonBody, &fp); err != nil {
+		fmt.Printf("[!] Fingerprints not updated: invalid format: %v\n", err)
+		return nil
+	}
+
+	localPath := data.FingerprintsLocalPath()
+	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
+		return fmt.Errorf("creating config dir: %w", err)
+	}
+	if err := os.WriteFile(localPath, jsonBody, 0644); err != nil {
+		return fmt.Errorf("writing fingerprints: %w", err)
+	}
+
+	fmt.Printf("[+] Version fingerprints updated: %s\n", localPath)
+	fmt.Printf("    Fingerprinted files: %d\n", len(fp))
 	return nil
 }
 

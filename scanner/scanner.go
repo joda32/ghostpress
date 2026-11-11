@@ -39,6 +39,7 @@ func New(opts model.ScanOptions, out output.Formatter) (*Scanner, error) {
 	}
 
 	wp.SetDebug(opts.Debug)
+	wp.SetWPAPIEnabled(!opts.NoWPAPI)
 
 	client, err := httpclient.New(clientOpts)
 	if err != nil {

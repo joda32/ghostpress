@@ -289,17 +289,19 @@ type ScanOptions struct {
 	DisableTLSChecks bool
 	Debug            bool
 	ShowUnconfirmed  bool
+	NoWPAPI          bool
 
 	Passwords      string
 	Usernames      []string
 	PasswordAttack string
 	LoginURI       string
 
-	PluginsSlugs   string
-	ThemesSlugs    string
-	UsersRange     string
-	MediaRange     string
-	SignaturesFile string
+	PluginsSlugs     string
+	ThemesSlugs      string
+	UsersRange       string
+	MediaRange       string
+	SignaturesFile   string
+	FingerprintsFile string
 }
 
 type EnumerateOptions struct {

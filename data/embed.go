@@ -33,7 +33,7 @@ var popularThemesRaw string
 var embeddedVulnDBGz []byte
 
 //go:embed wp_fingerprints.json
-var WPFingerprintsRaw []byte
+var embeddedFingerprints []byte
 
 //go:embed signatures.json
 var embeddedSignatures []byte
@@ -47,6 +47,10 @@ var (
 	signaturesOnce     sync.Once
 	signaturesCached   []byte
 	signaturesOverride string
+
+	fingerprintsOnce     sync.Once
+	fingerprintsCached   []byte
+	fingerprintsOverride string
 )
 
 // VulnDB returns the decompressed vulnerability database JSON. It prefers a
@@ -122,6 +126,40 @@ func SignaturesLocalPath() string {
 		return ""
 	}
 	return filepath.Join(home, ".ghostpress", "signatures.json")
+}
+
+// SetFingerprintsOverride makes WPFingerprints() prefer the given file (an ad-hoc
+// --fingerprints path) over the local and embedded copies. Call it before the
+// first call to WPFingerprints().
+func SetFingerprintsOverride(path string) { fingerprintsOverride = path }
+
+// WPFingerprints returns the raw WordPress core version-fingerprint JSON.
+// Precedence: the --fingerprints override, then a local copy at
+// ~/.ghostpress/wp_fingerprints.json, then the embedded default. Any source may
+// be gzip-compressed or raw JSON. This is what lets the fingerprint DB be
+// refreshed for newly released WordPress versions without rebuilding the binary.
+func WPFingerprints() []byte {
+	fingerprintsOnce.Do(func() {
+		for _, p := range []string{fingerprintsOverride, FingerprintsLocalPath()} {
+			if p == "" {
+				continue
+			}
+			if d, err := os.ReadFile(p); err == nil && len(d) > 2 {
+				fingerprintsCached = maybeGunzip(d)
+				return
+			}
+		}
+		fingerprintsCached = maybeGunzip(embeddedFingerprints)
+	})
+	return fingerprintsCached
+}
+
+func FingerprintsLocalPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".ghostpress", "wp_fingerprints.json")
 }
 
 func lines(raw string) []string {
