@@ -1,0 +1,87 @@
+name: Update version fingerprints
+
+# Rebuilds the WordPress core version-fingerprint DB (data/wp_fingerprints.json)
+# from the public WordPress core SVN tags, so ghostpress can fingerprint newly
+# released WordPress versions without a manual regeneration. The refreshed DB is
+# published as the rolling "fingerprints-latest" release asset (pulled by
+# `ghostpress update`) and committed back to main so the binary's embedded
+# fallback and the tracked path list stay current too.
+#
+# No secrets required: the generator reads only public core.svn.wordpress.org.
+# The list of files to fingerprint is the set of keys already in
+# data/wp_fingerprints.json, which stays the single source of truth for paths.
+
+on:
+  schedule:
+    - cron: "0 7 * * 1" # weekly, Monday 07:00 UTC
+  workflow_dispatch: {} # manual "Run workflow" button
+
+concurrency:
+  group: update-fingerprints
+  cancel-in-progress: false
+
+permissions:
+  contents: write # upload the release asset and push the refreshed DB
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Rebuild fingerprint database
+        working-directory: tools
+        run: |
+          # -min 5.0 matches the committed coverage floor; -o - writes in place
+          # to ../data/wp_fingerprints.json. Paths come from the existing file.
+          go run ./fingerprint-gen -min 5.0 -threads 12 -o -
+
+      - name: Sanity check (no coverage regression)
+        run: |
+          set -euo pipefail
+          test -s data/wp_fingerprints.json
+          jq empty data/wp_fingerprints.json
+          new=$(jq -r '[.[][][]] | unique | length' data/wp_fingerprints.json)
+          old=$(git show HEAD:data/wp_fingerprints.json | jq -r '[.[][][]] | unique | length')
+          echo "distinct versions: was $old, now $new"
+          # Fail the run (and skip publishing) if the DB is implausibly small or
+          # shrank versus the committed copy, e.g. a partial SVN outage.
+          test "$new" -ge 300
+          test "$new" -ge "$old"
+
+      - name: Publish rolling release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cp data/wp_fingerprints.json "$RUNNER_TEMP/wp_fingerprints.json"
+          (cd "$RUNNER_TEMP" && sha256sum wp_fingerprints.json > wp_fingerprints.json.sha256)
+          # Create the rolling release once; thereafter just replace its assets.
+          # --latest=false so this data release never shadows versioned binary
+          # releases as GitHub's "latest".
+          gh release create fingerprints-latest \
+            --title "WordPress core version fingerprints (latest)" \
+            --notes "Auto-generated from the WordPress core SVN tags. Pulled by \`ghostpress update\`." \
+            --latest=false \
+            2>/dev/null || true
+          gh release upload fingerprints-latest \
+            "$RUNNER_TEMP/wp_fingerprints.json" \
+            "$RUNNER_TEMP/wp_fingerprints.json.sha256" \
+            --clobber
+
+      - name: Commit refreshed database
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- data/wp_fingerprints.json; then
+            echo "No fingerprint changes to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/wp_fingerprints.json
+          git commit -m "Refresh WordPress core version fingerprints [skip ci]"
+          git push
