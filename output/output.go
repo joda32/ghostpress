@@ -5,6 +5,7 @@ import "ghostpress/model"
 type Formatter interface {
 	Banner()
 	ScanStarted(target model.TargetInfo)
+	WAFDetected(wafs []model.WAFDetection)
 	InterestingFindings(findings []model.InterestingFinding)
 	Version(version *model.WPVersion)
 	MainTheme(theme *model.Theme)

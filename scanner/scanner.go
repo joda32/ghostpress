@@ -84,7 +84,12 @@ func (s *Scanner) Run(ctx context.Context) *model.ScanResult {
 		PluginsDir:     target.PluginsDir,
 	}
 
+	// Fingerprint any WAF/CDN early (passive, from the homepage) so it's known
+	// before version detection and can be named in the interference summary.
+	result.WAF = wp.DetectWAF(target)
+
 	s.out.ScanStarted(result.Target)
+	s.out.WAFDetected(result.WAF)
 
 	if !target.IsWordPress && !s.opts.Force {
 		result.Error = "Target does not appear to be running WordPress"

@@ -197,7 +197,7 @@ func New(opts Options) (*Client, error) {
 // the *Capped helpers so large soft-404 / error pages aren't read in full.
 const defaultMaxBody = 10 * 1024 * 1024
 
-func (c *Client) do(ctx context.Context, method, rawURL string, body io.Reader, contentType string, maxBody int64) (*Response, error) {
+func (c *Client) do(ctx context.Context, method, rawURL string, body io.Reader, contentType string, maxBody int64, reqHeaders map[string]string) (*Response, error) {
 	c.sem <- struct{}{}
 	defer func() { <-c.sem }()
 
@@ -234,6 +234,11 @@ func (c *Client) do(ctx context.Context, method, rawURL string, body io.Reader, 
 			req.Header.Set("Content-Type", contentType)
 		}
 		for k, v := range c.headers {
+			req.Header.Set(k, v)
+		}
+		// Per-request headers override client-wide custom headers (e.g. a probe's
+		// Origin header for a CORS check).
+		for k, v := range reqHeaders {
 			req.Header.Set(k, v)
 		}
 		if c.cookieString != "" {
@@ -309,22 +314,28 @@ func (c *Client) dbg(method, url string, status, n int, dur time.Duration, err e
 }
 
 func (c *Client) Get(ctx context.Context, url string) (*Response, error) {
-	return c.do(ctx, http.MethodGet, url, nil, "", 0)
+	return c.do(ctx, http.MethodGet, url, nil, "", 0, nil)
 }
 
 // GetCapped is Get but buffers at most maxBody bytes of the response. Use it for
 // existence/version probes where only a small prefix is inspected, so a large
 // soft-404 or error page isn't read in full.
 func (c *Client) GetCapped(ctx context.Context, url string, maxBody int64) (*Response, error) {
-	return c.do(ctx, http.MethodGet, url, nil, "", maxBody)
+	return c.do(ctx, http.MethodGet, url, nil, "", maxBody, nil)
+}
+
+// GetWithHeaders is GetCapped with extra per-request headers (e.g. an Origin
+// header for a CORS probe). These override any client-wide custom headers.
+func (c *Client) GetWithHeaders(ctx context.Context, url string, maxBody int64, reqHeaders map[string]string) (*Response, error) {
+	return c.do(ctx, http.MethodGet, url, nil, "", maxBody, reqHeaders)
 }
 
 func (c *Client) Head(ctx context.Context, url string) (*Response, error) {
-	return c.do(ctx, http.MethodHead, url, nil, "", 0)
+	return c.do(ctx, http.MethodHead, url, nil, "", 0, nil)
 }
 
 func (c *Client) Post(ctx context.Context, url string, contentType string, body []byte) (*Response, error) {
-	return c.do(ctx, http.MethodPost, url, strings.NewReader(string(body)), contentType, 0)
+	return c.do(ctx, http.MethodPost, url, strings.NewReader(string(body)), contentType, 0, nil)
 }
 
 func (c *Client) PostWithCookie(ctx context.Context, rawURL string, contentType string, body []byte, cookie string) (*Response, error) {
@@ -451,7 +462,7 @@ func (c *Client) bulk(ctx context.Context, method string, urls []string, maxBody
 			default:
 			}
 
-			resp, err := c.do(ctx, method, rawURL, nil, "", maxBody)
+			resp, err := c.do(ctx, method, rawURL, nil, "", maxBody, nil)
 			results[idx] = BulkResult{URL: rawURL, Response: resp, Error: err}
 		}(i, u)
 	}

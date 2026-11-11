@@ -34,6 +34,10 @@ var (
 	// from the Wordfence feed. Override with --url, or at build time via
 	// -ldflags "-X main.vulnDBURL=...".
 	vulnDBURL = "https://github.com/joda32/ghostpress/releases/download/vulndb-latest/vulndb.json.gz"
+	// signaturesURL is where `ghostpress update` fetches the WAF/misconfiguration
+	// signatures from by default - a rolling release asset, like the vuln DB.
+	// Override with --signatures-url or at build time via -ldflags.
+	signaturesURL = "https://github.com/joda32/ghostpress/releases/download/signatures-latest/signatures.json"
 )
 
 func main() {
@@ -84,6 +88,7 @@ func main() {
 	flags.StringVar(&opts.MediaRange, "media-range", "50", "Attachment ID range for media brute forcing (default: 50)")
 	flags.StringVar(&opts.PluginsSlugs, "plugins-list", "", "File of plugin slugs to check (one per line; default: built-in popular list)")
 	flags.StringVar(&opts.ThemesSlugs, "themes-list", "", "File of theme slugs to check (one per line; default: built-in popular list)")
+	flags.StringVar(&opts.SignaturesFile, "signatures", "", "File of WAF/misconfiguration signatures to use (JSON; default: ~/.ghostpress/signatures.json or the built-in set)")
 
 	flags.StringVar(&opts.Passwords, "passwords", "", "Path to password wordlist file")
 	flags.StringSliceVar(&opts.Usernames, "usernames", nil, "Usernames to attack (default: enumerated users)")
@@ -108,16 +113,20 @@ func main() {
 	}
 	rootCmd.AddCommand(versionCmd)
 
-	var updateURL string
+	var updateURL, updateSigURL string
 	updateCmd := &cobra.Command{
 		Use:   "update",
-		Short: "Update the vulnerability database",
+		Short: "Update the vulnerability database and signatures",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return updateVulnDB(updateURL)
+			if err := updateVulnDB(updateURL); err != nil {
+				return err
+			}
+			return updateSignatures(updateSigURL)
 		},
 	}
 	updateCmd.Flags().StringVar(&updateURL, "url", vulnDBURL, "URL to fetch vulndb.json from")
+	updateCmd.Flags().StringVar(&updateSigURL, "signatures-url", signaturesURL, "URL to fetch signatures.json from")
 	rootCmd.AddCommand(updateCmd)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -126,6 +135,7 @@ func main() {
 }
 
 func runScan(opts model.ScanOptions, enumerate string) error {
+	data.SetSignaturesOverride(opts.SignaturesFile)
 	parseEnumerate(enumerate, &opts.Enumerate)
 
 	if !opts.Enumerate.Any() {
@@ -255,6 +265,73 @@ func updateVulnDB(rawURL string) error {
 	fmt.Printf("    Plugins:   %d vulns across %d plugins\n", pluginCount, len(db.Plugins))
 	fmt.Printf("    Themes:    %d vulns across %d themes\n", themeCount, len(db.Themes))
 	fmt.Printf("    Total:     %d vulnerabilities\n", wpCount+pluginCount+themeCount)
+	return nil
+}
+
+// updateSignatures refreshes the WAF/misconfiguration signatures from a release
+// asset. It is best-effort: a missing or unreachable asset (e.g. not published
+// yet) warns rather than failing the whole update, so the vuln-DB refresh still
+// counts.
+func updateSignatures(rawURL string) error {
+	if rawURL == "" {
+		return nil
+	}
+
+	fmt.Printf("[*] Downloading signatures from:\n    %s\n", rawURL)
+
+	client := &http.Client{Timeout: 60 * time.Second}
+
+	body, err := fetchURL(client, rawURL)
+	if err != nil {
+		fmt.Printf("[!] Signatures not updated: %v\n", err)
+		return nil
+	}
+
+	if sum, serr := fetchURL(client, rawURL+".sha256"); serr == nil {
+		want := strings.ToLower(strings.Fields(string(sum))[0])
+		got := fmt.Sprintf("%x", sha256.Sum256(body))
+		if _, derr := hex.DecodeString(want); derr == nil && want != got {
+			fmt.Printf("[!] Signatures checksum mismatch; not updated\n")
+			return nil
+		}
+		fmt.Printf("[*] Checksum verified\n")
+	}
+
+	jsonBody := body
+	if len(body) >= 2 && body[0] == 0x1f && body[1] == 0x8b {
+		r, gerr := gzip.NewReader(bytes.NewReader(body))
+		if gerr != nil {
+			fmt.Printf("[!] Signatures not updated: %v\n", gerr)
+			return nil
+		}
+		jsonBody, err = io.ReadAll(io.LimitReader(r, 50*1024*1024))
+		r.Close()
+		if err != nil {
+			fmt.Printf("[!] Signatures not updated: %v\n", err)
+			return nil
+		}
+	}
+
+	var sig struct {
+		WAF       []json.RawMessage `json:"waf"`
+		Misconfig []json.RawMessage `json:"misconfig"`
+	}
+	if err := json.Unmarshal(jsonBody, &sig); err != nil {
+		fmt.Printf("[!] Signatures not updated: invalid format: %v\n", err)
+		return nil
+	}
+
+	localPath := data.SignaturesLocalPath()
+	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
+		return fmt.Errorf("creating config dir: %w", err)
+	}
+	if err := os.WriteFile(localPath, jsonBody, 0644); err != nil {
+		return fmt.Errorf("writing signatures: %w", err)
+	}
+
+	fmt.Printf("[+] Signatures updated: %s\n", localPath)
+	fmt.Printf("    WAF signatures:   %d\n", len(sig.WAF))
+	fmt.Printf("    Misconfig checks: %d\n", len(sig.Misconfig))
 	return nil
 }
 

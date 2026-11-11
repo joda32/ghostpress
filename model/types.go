@@ -136,6 +136,15 @@ type InterestingFinding struct {
 	FoundBy            string      `json:"found_by"`
 }
 
+// WAFDetection is a web application firewall / CDN fingerprinted in front of the
+// target, matched passively against the homepage response (headers, cookies,
+// body). Evidence names the signal that triggered it, e.g. "CF-RAY header".
+type WAFDetection struct {
+	Vendor     string `json:"vendor"`
+	Confidence int    `json:"confidence"`
+	Evidence   string `json:"evidence,omitempty"`
+}
+
 type WPVersion struct {
 	Number             string          `json:"number"`
 	FoundBy            string          `json:"found_by"`
@@ -236,6 +245,7 @@ type ScanResult struct {
 	DataReceived        int64                `json:"data_received"`
 	RateLimited         int                  `json:"rate_limited,omitempty"`
 	Forbidden           int                  `json:"forbidden,omitempty"`
+	WAF                 []WAFDetection       `json:"waf,omitempty"`
 	Error               string               `json:"error,omitempty"`
 }
 
@@ -285,10 +295,11 @@ type ScanOptions struct {
 	PasswordAttack string
 	LoginURI       string
 
-	PluginsSlugs string
-	ThemesSlugs  string
-	UsersRange   string
-	MediaRange   string
+	PluginsSlugs   string
+	ThemesSlugs    string
+	UsersRange     string
+	MediaRange     string
+	SignaturesFile string
 }
 
 type EnumerateOptions struct {

@@ -29,6 +29,10 @@ func (f *JSONFormatter) ScanStarted(target model.TargetInfo) {
 	f.result.Target = target
 }
 
+func (f *JSONFormatter) WAFDetected(wafs []model.WAFDetection) {
+	f.result.WAF = wafs
+}
+
 func (f *JSONFormatter) InterestingFindings(findings []model.InterestingFinding) {
 	f.result.InterestingFindings = findings
 }

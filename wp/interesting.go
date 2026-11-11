@@ -23,6 +23,10 @@ func FindInteresting(ctx context.Context, client *httpclient.Client, target *Tar
 		findings = append(findings, aggressiveInteresting(ctx, client, target)...)
 	}
 
+	// Data-driven misconfiguration checks (signatures.json). Each check gates
+	// itself by detection mode, so this is safe to call in every mode.
+	findings = append(findings, RunMisconfigChecks(ctx, client, target, mode)...)
+
 	return findings
 }
 

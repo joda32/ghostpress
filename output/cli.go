@@ -150,6 +150,23 @@ func (f *CLIFormatter) Banner() {
 	f.pr("\n")
 }
 
+// wafVendors joins detected WAF vendor names for the interference summary, e.g.
+// "Cloudflare" or "Cloudflare and Sucuri CloudProxy". Returns "" if none.
+func wafVendors(wafs []model.WAFDetection) string {
+	names := make([]string, 0, len(wafs))
+	for _, w := range wafs {
+		names = append(names, w.Vendor)
+	}
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return names[0]
+	default:
+		return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+	}
+}
+
 // humanInt formats a count with thousands separators (e.g. 48213 -> "48,213").
 func humanInt(n int) string {
 	s := strconv.Itoa(n)
@@ -180,6 +197,16 @@ func (f *CLIFormatter) ScanStarted(target model.TargetInfo) {
 	}
 	if !target.WordPressFound {
 		f.pr("\n  %s%sWordPress not detected - use --force to scan anyway%s\n", f.p.bold, f.p.high, f.p.reset)
+	}
+}
+
+func (f *CLIFormatter) WAFDetected(wafs []model.WAFDetection) {
+	for _, w := range wafs {
+		line := w.Vendor
+		if w.Evidence != "" {
+			line += fmt.Sprintf(" (%s)", w.Evidence)
+		}
+		f.pr("  %s%-12s%s %s%s%s\n", f.p.method, "Firewall", f.p.reset, f.p.high, line, f.p.reset)
 	}
 }
 
@@ -485,8 +512,12 @@ func (f *CLIFormatter) ScanFinished(result *model.ScanResult) {
 	}
 
 	if result.RateLimited > 0 || result.Forbidden > 0 {
-		f.pr("%s%s⚠ interference detected: %d rate-limited (429/503), %d forbidden (403) - the target is likely behind a WAF; some version detection was blocked and results may be incomplete%s\n",
-			f.p.bold, f.p.high, result.RateLimited, result.Forbidden, f.p.reset)
+		waf := "the target is likely behind a WAF"
+		if names := wafVendors(result.WAF); names != "" {
+			waf = "the target is behind " + names
+		}
+		f.pr("%s%s⚠ interference detected: %d rate-limited (429/503), %d forbidden (403) - %s; some version detection was blocked and results may be incomplete%s\n",
+			f.p.bold, f.p.high, result.RateLimited, result.Forbidden, waf, f.p.reset)
 	}
 
 	unconfirmed := 0

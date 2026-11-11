@@ -35,11 +35,18 @@ var embeddedVulnDBGz []byte
 //go:embed wp_fingerprints.json
 var WPFingerprintsRaw []byte
 
+//go:embed signatures.json
+var embeddedSignatures []byte
+
 var _ embed.FS
 
 var (
 	vulnDBOnce   sync.Once
 	vulnDBCached []byte
+
+	signaturesOnce     sync.Once
+	signaturesCached   []byte
+	signaturesOverride string
 )
 
 // VulnDB returns the decompressed vulnerability database JSON. It prefers a
@@ -82,6 +89,39 @@ func VulnDBLocalPath() string {
 		return ""
 	}
 	return filepath.Join(home, ".ghostpress", "vulndb.json")
+}
+
+// SetSignaturesOverride makes Signatures() prefer the given file (an ad-hoc
+// --signatures path) over the local and embedded copies. Call it before the
+// first call to Signatures().
+func SetSignaturesOverride(path string) { signaturesOverride = path }
+
+// Signatures returns the raw WAF/misconfiguration signatures JSON. Precedence:
+// the --signatures override file, then a local copy at ~/.ghostpress/signatures.json,
+// then the embedded default. Any source may be gzip-compressed or raw JSON. This
+// is what lets signatures change without rebuilding the binary.
+func Signatures() []byte {
+	signaturesOnce.Do(func() {
+		for _, p := range []string{signaturesOverride, SignaturesLocalPath()} {
+			if p == "" {
+				continue
+			}
+			if d, err := os.ReadFile(p); err == nil && len(d) > 2 {
+				signaturesCached = maybeGunzip(d)
+				return
+			}
+		}
+		signaturesCached = maybeGunzip(embeddedSignatures)
+	})
+	return signaturesCached
+}
+
+func SignaturesLocalPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".ghostpress", "signatures.json")
 }
 
 func lines(raw string) []string {
